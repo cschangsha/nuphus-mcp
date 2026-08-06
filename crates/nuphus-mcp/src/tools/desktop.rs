@@ -333,7 +333,7 @@ async fn perceive(args: &Value) -> Result<String, String> {
     });
     if !output.yolo_available {
         result["yolo_disabled_reason"] = json!(
-            "icon_detect.onnx not found (optional). OCR-only result. See docs for manual model setup."
+            "icon_detect.onnx not available (auto-download failed or skipped). OCR-only result. Retry desktop_perceive to re-attempt the download, or set NUPHUS_MCP_YOLO_MODEL_URL for a custom source."
         );
     }
     Ok(result.to_string())

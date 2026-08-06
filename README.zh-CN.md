@@ -106,10 +106,12 @@ server 退出时不会杀掉它。
 
 ### perceive 模型（本地，自动下载）
 
-`desktop_perceive` 用 ONNX Runtime 本地运行 PaddleOCR。首次调用自动下载 OCR
-模型到 `%APPDATA%\Nuphus\models`（或 `NUPHUS_MODELS_DIR`）。下载失败时返回
-明确错误并附手动指引。YOLO 图标检测（`icon_detect.onnx`）是可选增强，不自动
-下载。详见 [TOOLS.zh-CN.md → 视觉与本地模型](TOOLS.zh-CN.md#视觉与本地模型)。
+`desktop_perceive` 用 ONNX Runtime 本地运行 PaddleOCR 和 YOLO 图标检测。首次
+调用把 OCR 模型和 `icon_detect.onnx` **一起**自动下载到
+`%APPDATA%\Nuphus\models`（或 `NUPHUS_MODELS_DIR`）。下载失败时返回明确错误
+并附手动指引。YOLO 在运行时是可选增强：下载失败时 perceive 仍返回 OCR 结果
+并报告 `yolo_available: false`（可通过 `NUPHUS_MCP_YOLO_MODEL_URL` 指定自定
+义来源）。详见 [TOOLS.zh-CN.md → 视觉与本地模型](TOOLS.zh-CN.md#视觉与本地模型)。
 
 其余工具无需任何 API key。
 

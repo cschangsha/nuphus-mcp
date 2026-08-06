@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-08-06
+
+### Added
+
+- **YOLO model auto-download** — `desktop_perceive` now downloads
+  `icon_detect.onnx` together with the PaddleOCR models on first run, instead
+  of requiring a manual placement. Default source is onnx-community's
+  OmniParser icon_detect 640x640 ONNX export (hf-mirror.com first,
+  huggingface.co fallback; same `[1,3,640,640]` → `[1,5,8400]` I/O contract as
+  the exported model). Set `NUPHUS_MCP_YOLO_MODEL_URL` to override with any
+  direct `.onnx` URL (e.g. the full ~80 MB OmniParser export or a private
+  mirror). A failed YOLO download degrades gracefully to OCR-only and reports
+  `yolo_available: false` — it never blocks perceive. `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1`
+  skips both OCR and YOLO downloads. `icon_detect.onnx` passes the same size
+  floor and ONNX trial-load integrity checks as the OCR models.
+
+### Fixed
+
+- **`NUPHUS_MCP_YOLO_MODEL_URL` was documented but unimplemented** — the env
+  var is now actually honored by the downloader.
+
 ## [0.1.8] - 2026-08-06
 
 ### Added
@@ -189,6 +210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs**: `TOOLS.md` / `TOOLS.zh-CN.md` (36-tool reference), demo example
   (`examples/demo.rs`).
 
+[0.1.9]: https://github.com/mrpulor-gh/nuphus-mcp/releases/tag/v0.1.9
 [0.1.8]: https://github.com/mrpulor-gh/nuphus-mcp/releases/tag/v0.1.8
 [0.1.7]: https://github.com/mrpulor-gh/nuphus-mcp/releases/tag/v0.1.7
 [0.1.6]: https://github.com/mrpulor-gh/nuphus-mcp/releases/tag/v0.1.6

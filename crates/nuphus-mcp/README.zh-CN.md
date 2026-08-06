@@ -58,12 +58,16 @@ set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 ### perceive 模型（本地，自动下载）
 
 `desktop_perceive` 用 ONNX Runtime 本地运行 PaddleOCR（`ch_PP-OCRv4_det.onnx`、
-`ch_PP-OCRv4_rec.onnx`、`ch_PP-OCR_keys_v1.txt`）。首次调用自动下载到
+`ch_PP-OCRv4_rec.onnx`、`ch_PP-OCR_keys_v1.txt`）和 YOLO 图标检测
+（`icon_detect.onnx`）。首次调用把**全部模型一起**自动下载到
 `%APPDATA%\Nuphus\models`（或 `NUPHUS_MODELS_DIR`）。下载失败时工具返回明确
 错误并附手动下载指引，绝不 panic。
 
-- YOLO 图标检测（`icon_detect.onnx`，~80MB）是**可选**增强；无稳定公开 URL，
-  不自动下载。缺失时 `desktop_perceive` 仍返回 OCR 结果并报告 `yolo_available: false`。
+- YOLO 图标检测（`icon_detect.onnx`）随 PaddleOCR 一起自动下载，来源为
+  `onnx-community/OmniParser-icon_detect_640x640`（优先 hf-mirror.com，回退
+  huggingface.co）。它在运行时是**可选**的：下载失败时 `desktop_perceive` 仍返回
+  OCR 结果并报告 `yolo_available: false`。如需指定其它来源（如完整 ~80MB 的
+  OmniParser 导出或私有镜像），设置 `NUPHUS_MCP_YOLO_MODEL_URL` 为 `.onnx` 直链。
 - `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1` 跳过自动下载（受限网络/CI 快速失败）。
 - 运行需要 `onnxruntime.dll` 可加载（Nuphus 主程序旁已内置；独立运行时请把它
   复制到 `nuphus-mcp.exe` 同目录）。

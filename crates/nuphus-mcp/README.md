@@ -60,14 +60,18 @@ set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 ### Perceive models (local, auto-downloaded)
 
 `desktop_perceive` runs PaddleOCR (`ch_PP-OCRv4_det.onnx`, `ch_PP-OCRv4_rec.onnx`,
-`ch_PP-OCR_keys_v1.txt`) locally with ONNX Runtime. The first call downloads the
-models automatically into `%APPDATA%\Nuphus\models` (or `NUPHUS_MODELS_DIR` if
-set). If a download fails the tool returns a clear error with manual download
-instructions — it never panics.
+`ch_PP-OCR_keys_v1.txt`) and the YOLO icon detector (`icon_detect.onnx`) locally
+with ONNX Runtime. The first call downloads **all models together** automatically
+into `%APPDATA%\Nuphus\models` (or `NUPHUS_MODELS_DIR` if set). If a download
+fails the tool returns a clear error with manual download instructions — it never
+panics.
 
-- YOLO icon detection (`icon_detect.onnx`, ~80 MB) is an **optional** enhancement;
-  it is not auto-downloaded because there is no stable public URL. When absent,
+- YOLO icon detection (`icon_detect.onnx`) is auto-downloaded alongside PaddleOCR
+  from `onnx-community/OmniParser-icon_detect_640x640` (hf-mirror.com first,
+  huggingface.co fallback). It is **optional** at runtime: if its download fails,
   `desktop_perceive` still returns OCR elements and reports `yolo_available: false`.
+  To use a different source (e.g. the full ~80 MB OmniParser export or a private
+  mirror), set `NUPHUS_MCP_YOLO_MODEL_URL` to the direct `.onnx` URL.
 - `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1` skips the automatic download (fast-fail on
   restricted networks / CI).
 - Requires `onnxruntime.dll` on the library search path (it is bundled next to

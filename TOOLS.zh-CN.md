@@ -123,8 +123,11 @@ set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 `hf-mirror.com/SWHL/RapidOCR`（det/rec ONNX）与 `gitee.com/paddlepaddle/PaddleOCR`
 （字符字典）。下载失败时工具返回明确错误并附手动下载指引。
 
-- **YOLO 图标检测**（`icon_detect.onnx`，~80MB）是*可选*增强；无稳定公开 URL，
-  不自动下载。缺失时 `desktop_perceive` 仍返回 OCR 结果并报告 `yolo_available: false`。
+- **YOLO 图标检测**（`icon_detect.onnx`）随 OCR 模型一起自动下载（来源：
+  `onnx-community/OmniParser-icon_detect_640x640`，优先 hf-mirror）。它在运行
+  时是*可选*增强：下载失败时 `desktop_perceive` 仍返回 OCR 结果并报告
+  `yolo_available: false`。设置 `NUPHUS_MCP_YOLO_MODEL_URL` 为 `.onnx` 直链可
+  覆盖默认来源（如完整 ~80MB 的 OmniParser 导出或私有镜像）。
 - `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1` 跳过自动下载（受限网络/CI 快速失败）。
 - 运行需要 `onnxruntime.dll` 可加载（Nuphus 主程序旁已内置；独立运行时请把它
   复制到 `nuphus-mcp.exe` 同目录）。

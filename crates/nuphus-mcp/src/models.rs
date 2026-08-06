@@ -1,20 +1,24 @@
-//! `desktop_perceive` local model management — downloads PaddleOCR models automatically on first run.
+//! `desktop_perceive` local model management — downloads the PaddleOCR models and the YOLO icon
+//! detection model automatically on first run (both are part of the same perceive pipeline).
 //!
 //! Model files land in the same location as the main app (`NUPHUS_MODELS_DIR` or `data_dir/Nuphus/models`),
 //! resolved by `vision::models` in desktop-api. Download sources mirror the main crate's build.rs:
 //! - Detection/recognition ONNX: `hf-mirror.com/SWHL/RapidOCR` (HuggingFace mirror),
 //!   falling back to the official `huggingface.co` source on failure.
 //! - Character dictionary: `gitee.com/paddlepaddle/PaddleOCR`.
+//! - YOLO `icon_detect.onnx`: `onnx-community/OmniParser-icon_detect_640x640` ONNX export
+//!   (`hf-mirror.com` first, `huggingface.co` fallback); the same I/O contract as the Nuphus
+//!   exported model (`images [1,3,640,640]` → `output0 [1,5,8400]`).
 //!
-//! YOLO's `icon_detect.onnx` (~80MB, must be exported from OmniParser) has no stable public URL,
-//! so it is not auto-downloaded; when missing, perceive still runs in OCR mode and honestly reports YOLO as unavailable.
-//! Users can provide a custom download URL via `NUPHUS_MCP_YOLO_MODEL_URL`.
+//! YOLO stays optional at runtime: if its download fails, perceive runs in OCR-only mode and
+//! honestly reports YOLO as unavailable. Users can pin a custom source (e.g. a private mirror or
+//! the full ~80MB OmniParser export) via `NUPHUS_MCP_YOLO_MODEL_URL`.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use desktop_api::vision::models::{
-    models_dir_for_write, validate_ocr_models, yolo_model_available, PADDLE_OCR_FILES,
+    models_dir_for_write, validate_ocr_models, yolo_model_available, PADDLE_OCR_FILES, YOLO_MODEL,
 };
 
 /// Model readiness status (used by desktop_perceive).
@@ -47,11 +51,13 @@ fn sources_for(file: &str) -> Vec<&'static str> {
     }
 }
 
-/// Ensure local models are ready: auto-download any missing PaddleOCR files.
+/// Ensure local models are ready: auto-download the PaddleOCR files and the YOLO icon detection
+/// model together on first run.
 ///
 /// - OCR files all present or downloaded successfully → `Ok(status)` (`yolo_available` reported honestly).
 /// - Any OCR file download fails → `Err` (clear error + manual download instructions), no panic.
-/// - Setting `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1` skips auto-download (fast-fail for restricted networks/CI:
+/// - YOLO download failure is **not** fatal: perceive degrades to OCR-only and reports `yolo_available=false`.
+/// - Setting `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1` skips both downloads (fast-fail for restricted networks/CI:
 ///   existence-only check that returns a clear error).
 pub async fn ensure_models() -> Result<ModelStatus, String> {
     let dir = models_dir_for_write()?;
@@ -61,33 +67,50 @@ pub async fn ensure_models() -> Result<ModelStatus, String> {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    // Validate first, to avoid unnecessary requests when everything is already present
-    if !skip_download && validate_ocr_models(&dir).is_err() {
+    // Validate first, to avoid unnecessary requests when everything is already present.
+    // One shared client covers the OCR trio and the YOLO model.
+    let ocr_missing = validate_ocr_models(&dir).is_err();
+    let yolo_missing = !yolo_model_available(&dir);
+    if !skip_download && (ocr_missing || yolo_missing) {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|e| format!("build http client failed: {}", e))?;
 
-        for file in PADDLE_OCR_FILES {
-            let dest = dir.join(file);
-            if dest.exists() {
-                continue;
-            }
-            let sources = sources_for(file);
-            if sources.is_empty() {
-                continue;
-            }
-            match download_with_fallback(&client, &sources, &dest).await {
-                Ok(()) => {
-                    downloaded.push(file.to_string());
+        if ocr_missing {
+            for file in PADDLE_OCR_FILES {
+                let dest = dir.join(file);
+                if dest.exists() {
+                    continue;
                 }
-                Err(e) => {
-                    return Err(format!(
-                        "desktop_perceive model download failed for {file}: {e}\n\
-                         Please download the following files manually into {}:\n  - ch_PP-OCRv4_det.onnx ← https://hf-mirror.com/SWHL/RapidOCR\n  - ch_PP-OCRv4_rec.onnx ← https://hf-mirror.com/SWHL/RapidOCR\n  - ch_PP-OCR_keys_v1.txt ← https://gitee.com/paddlepaddle/PaddleOCR",
-                        dir.display()
-                    ));
+                let sources = sources_for(file);
+                if sources.is_empty() {
+                    continue;
                 }
+                match download_with_fallback(&client, &sources, &dest).await {
+                    Ok(()) => {
+                        downloaded.push(file.to_string());
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "desktop_perceive model download failed for {file}: {e}\n\
+                             Please download the following files manually into {}:\n  - ch_PP-OCRv4_det.onnx ← https://hf-mirror.com/SWHL/RapidOCR\n  - ch_PP-OCRv4_rec.onnx ← https://hf-mirror.com/SWHL/RapidOCR\n  - ch_PP-OCR_keys_v1.txt ← https://gitee.com/paddlepaddle/PaddleOCR",
+                            dir.display()
+                        ));
+                    }
+                }
+            }
+        }
+
+        // YOLO icon detection model — same download pipeline as the OCR files, including the
+        // size floor and the ONNX trial-load gate. A failure is downgraded, not fatal.
+        if yolo_missing {
+            let dest = dir.join(YOLO_MODEL);
+            match download_with_fallback(&client, &yolo_sources(), &dest).await {
+                Ok(()) => downloaded.push(YOLO_MODEL.to_string()),
+                Err(e) => tracing::warn!(
+                    "[models] YOLO model download failed, perceive continues in OCR-only mode: {e}"
+                ),
             }
         }
     }
@@ -108,15 +131,37 @@ pub async fn ensure_models() -> Result<ModelStatus, String> {
     })
 }
 
+/// YOLO `icon_detect.onnx` download sources (tried in order).
+///
+/// `NUPHUS_MCP_YOLO_MODEL_URL` overrides the default entirely — for a private mirror or the full
+/// ~80MB OmniParser export. Default: onnx-community's OmniParser icon_detect 640x640 ONNX export,
+/// which exposes the same I/O contract the YOLO runtime expects
+/// (`images [1,3,640,640]` → `output0 [1,5,8400]`), via hf-mirror.com first (China-friendly),
+/// huggingface.co fallback.
+fn yolo_sources() -> Vec<String> {
+    if let Ok(url) = std::env::var("NUPHUS_MCP_YOLO_MODEL_URL") {
+        let url = url.trim().to_string();
+        if !url.is_empty() {
+            return vec![url];
+        }
+    }
+    vec![
+        "https://hf-mirror.com/onnx-community/OmniParser-icon_detect_640x640/resolve/main/onnx/model.onnx"
+            .to_string(),
+        "https://huggingface.co/onnx-community/OmniParser-icon_detect_640x640/resolve/main/onnx/model.onnx"
+            .to_string(),
+    ]
+}
+
 /// Try each candidate source in order; return Err if all fail.
-async fn download_with_fallback(
+async fn download_with_fallback<S: AsRef<str>>(
     client: &reqwest::Client,
-    sources: &[&'static str],
+    sources: &[S],
     dest: &std::path::Path,
 ) -> Result<(), String> {
     let mut last_err: Option<String> = None;
     for url in sources {
-        match download_file(client, url, dest).await {
+        match download_file(client, url.as_ref(), dest).await {
             Ok(()) => return Ok(()),
             Err(e) => last_err = Some(e),
         }
@@ -135,6 +180,9 @@ async fn download_with_fallback(
 fn min_expected_bytes(file: &str) -> u64 {
     match file {
         "ch_PP-OCRv4_det.onnx" | "ch_PP-OCRv4_rec.onnx" => 1_000_000,
+        // icon_detect.onnx default source is ~12MB fp32; smallest legit variant is ~3.3MB
+        // (int8), so 2MB rejects error pages while accepting any real export.
+        "icon_detect.onnx" => 2_000_000,
         "ch_PP-OCR_keys_v1.txt" => 10_000,
         _ => 0,
     }
@@ -274,7 +322,45 @@ mod tests {
         for f in PADDLE_OCR_FILES {
             assert!(min_expected_bytes(f) > 0, "{f} must have a size floor");
         }
+        // YOLO is now auto-downloaded too, so it must carry a size floor as well.
+        assert!(
+            min_expected_bytes(desktop_api::vision::models::YOLO_MODEL) > 0,
+            "icon_detect.onnx must have a size floor"
+        );
         assert_eq!(min_expected_bytes("nope.onnx"), 0);
+    }
+
+    #[test]
+    fn yolo_sources_default_and_override() {
+        let _lock = crate::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // Override: NUPHUS_MCP_YOLO_MODEL_URL wins and replaces the defaults entirely.
+        std::env::set_var(
+            "NUPHUS_MCP_YOLO_MODEL_URL",
+            "https://example.com/custom/icon_detect.onnx",
+        );
+        assert_eq!(
+            yolo_sources(),
+            vec!["https://example.com/custom/icon_detect.onnx".to_string()]
+        );
+
+        // Unset: default list, mirror first.
+        std::env::remove_var("NUPHUS_MCP_YOLO_MODEL_URL");
+        let defaults = yolo_sources();
+        assert!(
+            defaults.len() >= 2,
+            "expected mirror + fallback: {defaults:?}"
+        );
+        assert!(
+            defaults[0].starts_with("https://hf-mirror.com/"),
+            "mirror must be tried first: {defaults:?}"
+        );
+        assert!(
+            defaults.iter().any(|u| u.contains("huggingface.co")),
+            "huggingface fallback expected: {defaults:?}"
+        );
     }
 
     #[test]

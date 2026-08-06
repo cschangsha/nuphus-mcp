@@ -132,10 +132,12 @@ downloads the OCR models automatically into `%APPDATA%\Nuphus\models` (or
 download fails the tool returns a clear error with manual download
 instructions.
 
-- **YOLO icon detection** (`icon_detect.onnx`, ~80 MB) is an *optional*
-  enhancement; there is no stable public URL so it is not auto-downloaded. When
-  absent, `desktop_perceive` still returns OCR elements and reports
-  `yolo_available: false`.
+- **YOLO icon detection** (`icon_detect.onnx`) is auto-downloaded alongside the
+  OCR models (source: `onnx-community/OmniParser-icon_detect_640x640`, hf-mirror
+  first). It is *optional* at runtime: if its download fails, `desktop_perceive`
+  still returns OCR elements and reports `yolo_available: false`. Set
+  `NUPHUS_MCP_YOLO_MODEL_URL` to a direct `.onnx` URL to override the source
+  (e.g. the full ~80 MB OmniParser export or a private mirror).
 - `NUPHUS_MCP_NO_MODEL_DOWNLOAD=1` skips the automatic download (fast-fail on
   restricted networks / CI).
 - Requires `onnxruntime.dll` on the library search path (bundled next to the

@@ -149,12 +149,13 @@ configured URL. Either way there is **no fallback to a managed Chrome**.
 
 ### Perceive models (local, auto-downloaded)
 
-`desktop_perceive` runs PaddleOCR locally with ONNX Runtime. The first call
-downloads the OCR models automatically into `%APPDATA%\Nuphus\models` (or
-`NUPHUS_MODELS_DIR`). Download failures return a clear error with manual
-instructions. YOLO icon detection (`icon_detect.onnx`) is an optional
-enhancement and is not auto-downloaded. See
-[TOOLS.md → Vision & Local Models](TOOLS.md#vision--local-models).
+`desktop_perceive` runs PaddleOCR and YOLO icon detection locally with ONNX
+Runtime. The first call downloads the OCR models and `icon_detect.onnx` together
+automatically into `%APPDATA%\Nuphus\models` (or `NUPHUS_MODELS_DIR`). Download
+failures return a clear error with manual instructions. YOLO is optional at
+runtime: if its download fails, perceive still returns OCR elements and reports
+`yolo_available: false` (use `NUPHUS_MCP_YOLO_MODEL_URL` for a custom source).
+See [TOOLS.md → Vision & Local Models](TOOLS.md#vision--local-models).
 
 All other tools need no API key.
 
