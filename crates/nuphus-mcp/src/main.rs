@@ -8,6 +8,7 @@
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 
+use nuphus_browser::shutdown_browser;
 use nuphus_mcp::security::SecurityPolicy;
 use nuphus_mcp::server::McpServer;
 
@@ -80,11 +81,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             writer.flush().await?;
             let code = server.exit_code();
             tracing::info!("[nuphus-mcp] exit notification received, exiting (code={code})");
+            // Explicit browser shutdown: the shared client lives in a `static` and is never
+            // dropped on exit, so without this a launched Chrome would be orphaned, holding
+            // the profile lock and destabilizing the next session (see shared::shutdown_browser).
+            shutdown_browser().await;
             std::process::exit(code as i32);
         }
     }
 
+    // stdin EOF (host closed the pipe): same explicit cleanup before returning.
     tracing::info!("[nuphus-mcp] stdin EOF, shutting down");
+    shutdown_browser().await;
     Ok(())
 }
 

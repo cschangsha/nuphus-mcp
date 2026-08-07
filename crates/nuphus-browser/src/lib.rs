@@ -15,7 +15,7 @@ pub mod cookie_source;
 
 pub use chrome_finder::{find_chrome, ChromeError};
 pub use client::{BrowserClient, BrowserError, ExternalIdentity};
-pub use shared::{get_or_launch, runtime, shared_client};
+pub use shared::{get_or_launch, runtime, shared_client, shutdown_browser};
 
 /// Round a byte index down to the nearest valid UTF-8 character boundary.
 ///

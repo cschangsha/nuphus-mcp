@@ -337,6 +337,13 @@ const ACTIONABILITY_TIMEOUT_MS: u64 = 5000;
 /// Poll step of the in-page actionability wait loop (single evaluate round trip,
 /// no Rust-side CDP polling).
 const ACTIONABILITY_POLL_MS: u64 = 100;
+/// CDP budget for the actionability evaluate: the in-page wait loop runs up to
+/// `ACTIONABILITY_TIMEOUT_MS` and then throws a descriptive timeout error (with
+/// the `browser_snapshot` hint), so the CDP timeout must sit *above* the JS side
+/// — otherwise the tokio budget fires first and strips the hint. Only a genuinely
+/// wedged CDP call (frozen renderer, mid-navigation) hits this budget.
+const ACTIONABILITY_CDP_BUDGET: std::time::Duration =
+    std::time::Duration::from_millis(ACTIONABILITY_TIMEOUT_MS + 2000);
 /// Retry budget for @N refs whose backend node went stale between snapshot and
 /// use (page re-rendered): retries × interval, then the original error surfaces.
 const STALE_NODE_RETRIES: u32 = 3;
@@ -345,13 +352,23 @@ const STALE_NODE_RETRY_MS: u64 = 200;
 /// chromiumoxide's navigation-aware `goto` holds the `Page.navigate` response
 /// until the frame's `load` lifecycle event (hard `REQUEST_TIMEOUT` = 30s), so a
 /// page with a hanging/blocked subresource would hang the whole tool on the
-/// outer 30s guard. Wait this long, then degrade to polling
-/// `document.readyState` (DOM is usable at "interactive").
-const NAVIGATE_LOAD_WAIT_SECS: u64 = 10;
+/// outer 30s guard. Kept short on purpose: on a SPA (or any page whose `load`
+/// is delayed by blocked subresources) `goto` would otherwise burn the whole
+/// budget waiting on an event that never fires. Time out fast, then degrade to
+/// polling `document.readyState` — the DOM is usable at "interactive", which is
+/// what an automation actually needs; the full `load` adds nothing for the agent.
+const NAVIGATE_LOAD_WAIT_SECS: u64 = 5;
 /// Fallback deadline (after the load-event wait) for the DOM to become
 /// interactive. Combined with NAVIGATE_LOAD_WAIT_SECS it stays well inside the
-/// tool-level 30s guard (10s + 12s = 22s).
+/// tool-level 30s guard (5s + 12s = 17s).
 const NAVIGATE_DOM_READY_SECS: u64 = 12;
+/// Upper bound for any single CDP evaluate/execute call. chromiumoxide's
+/// `CommandFuture` hard-codes `handler::REQUEST_TIMEOUT` = 30s and ignores
+/// `BrowserConfig::request_timeout` for evaluate/execute, so without this a page
+/// whose CDP connection is unresponsive (mid-navigation, half-dead renderer)
+/// stalls the whole tool for 30s. Wrapping every raw CDP call in [`cdp`] caps
+/// each at this budget and fails fast with a clear error instead.
+const CDP_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Recursively walk the AX tree node array, collecting interactive nodes.
 ///
@@ -432,8 +449,7 @@ async fn resolve_selector_backend_id(page: &Page, selector: &str) -> Result<u32,
         node_id: 0,
         selector: selector.to_string(),
     };
-    let query_resp = page
-        .execute(query_cmd)
+    let query_resp = cdp(page.execute(query_cmd))
         .await
         .map_err(|e| format!("DOM.querySelector failed: {}", e))?;
 
@@ -452,8 +468,7 @@ async fn resolve_selector_backend_id(page: &Page, selector: &str) -> Result<u32,
         node_id,
         depth: Some(1),
     };
-    let desc_resp = page
-        .execute(desc_cmd)
+    let desc_resp = cdp(page.execute(desc_cmd))
         .await
         .map_err(|e| format!("DOM.describeNode failed: {}", e))?;
 
@@ -555,6 +570,35 @@ fn resolve_debug_port(port: u16, profile: Option<&std::path::Path>) -> Option<u1
         .parse::<u16>()
         .ok()
         .filter(|p| *p > 0)
+}
+
+/// Fallback DevTools endpoint: read `<profile>/DevToolsActivePort` — the file
+/// the browser itself writes at the profile root (first line port, second line
+/// ws path). Returns the `ws://127.0.0.1:<port><path>` URL only when the file
+/// exists AND the port is actually listening. A stale file (browser already
+/// exited) must never be treated as healthy — that is what the TCP liveness
+/// probe filters out.
+async fn dev_tools_active_port_url(profile: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(profile.join("DevToolsActivePort")).ok()?;
+    let mut lines = content.lines();
+    let port = lines
+        .next()?
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|p| *p > 0)?;
+    let ws_path = lines.next().map(str::trim).filter(|s| !s.is_empty())?;
+    let url = format!("ws://127.0.0.1:{port}{ws_path}");
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_millis(1000),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    .ok()?;
+    if probe.is_err() {
+        return None;
+    }
+    Some(url)
 }
 
 /// Whether two executable paths refer to the same file. Case-insensitive on
@@ -900,42 +944,95 @@ impl BrowserClient {
             .ok_or_else(|| BrowserError::Launch("no stderr pipe".into()))?;
         let inner_stderr = stderr.into_inner(); // tokio::process::ChildStderr
         let mut reader = tokio::io::BufReader::new(inner_stderr);
+
+        // Resolve the DevTools endpoint from stderr, with a DevToolsActivePort
+        // fallback. A premature stderr EOF/timeout must NOT be treated as launch
+        // failure: on Windows, Edge/Chrome can close (re-target) its stderr pipe
+        // during startup while the browser keeps running and has already written
+        // DevToolsActivePort (issue#2: healthy Edge, healthy port, nuphus saw EOF).
+        let mut stderr_buf = String::new();
         let mut line = String::new();
-        // Read stderr line-by-line with 20s timeout to find DevTools URL
+        let mut parse_detail = String::new();
         let timeout = tokio::time::sleep(std::time::Duration::from_secs(20));
         tokio::pin!(timeout);
 
-        let ws_url = loop {
+        let ws_url_from_stderr: Option<String> = loop {
             tokio::select! {
                 _ = &mut timeout => {
-                    let _ = child.kill().await;
-                    return Err(BrowserError::Launch("timeout waiting for DevTools URL".into()));
+                    parse_detail = "timeout waiting for DevTools URL".to_string();
+                    break None;
                 }
                 result = reader.read_line(&mut line) => {
                     match result {
                         Ok(0) => {
-                            return Err(BrowserError::Launch(
-                                "Chrome stderr closed before DevTools URL appeared".into()
-                            ));
+                            parse_detail =
+                                "stderr closed before the DevTools URL line appeared".to_string();
+                            break None;
                         }
                         Ok(_) => {
+                            stderr_buf.push_str(&line);
                             if let Some(url) = line.trim().strip_prefix("DevTools listening on ") {
-                                break url.to_string();
+                                break Some(url.to_string());
                             }
                             line.clear();
                         }
                         Err(e) => {
-                            let _ = child.kill().await;
-                            return Err(BrowserError::Launch(
-                                format!("stderr read error: {e}")
-                            ));
+                            parse_detail = format!("stderr read error: {e}");
+                            break None;
                         }
                     }
                 }
             }
         };
 
-        // Connect to Chrome via the extracted WebSocket URL
+        let ws_url = match ws_url_from_stderr {
+            Some(url) => url,
+            None => {
+                // Fallback: the browser writes DevToolsActivePort itself even when
+                // the stderr line never reaches our pipe. If the file already exists
+                // but the port is dead, fail fast (browser gone); otherwise poll
+                // briefly for it to appear (browser still starting up).
+                let fallback = async {
+                    if self.profile_dir.join("DevToolsActivePort").exists() {
+                        return dev_tools_active_port_url(&self.profile_dir).await;
+                    }
+                    for _ in 0..20 {
+                        if let Some(url) = dev_tools_active_port_url(&self.profile_dir).await {
+                            return Some(url);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                    None
+                }
+                .await;
+
+                match fallback {
+                    Some(url) => url,
+                    None => {
+                        // No fallback: clean up the child explicitly (do not rely on
+                        // kill_on_drop alone) and report with the captured stderr so
+                        // the failure is actually diagnosable.
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        let stderr_tail: String = stderr_buf
+                            .chars()
+                            .rev()
+                            .take(500)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        return Err(BrowserError::Launch(format!(
+                            "Chrome did not expose a DevTools endpoint: {parse_detail} \
+                             (stderr tail: {stderr_tail:?}); DevToolsActivePort fallback failed too"
+                        )));
+                    }
+                }
+            }
+        };
+
+        // Connect to Chrome via the resolved WebSocket URL (stderr line or
+        // DevToolsActivePort fallback)
         let (browser, mut handler) = Browser::connect(&ws_url)
             .await
             .map_err(|e| BrowserError::Launch(format!("CDP connect failed: {e}")))?;
@@ -1012,6 +1109,11 @@ impl BrowserClient {
                 ),
             }
         }
+
+        // A3: adopt the first existing page as the current tab (refreshing a leftover /
+        // orphan instance's page) so this session reuses the old tab instead of letting
+        // navigate's new_page fallback accumulate fresh tabs on every reattach.
+        self.adopt_existing_page(&browser_arc, true).await;
 
         Ok(())
     }
@@ -1167,6 +1269,10 @@ impl BrowserClient {
             }
         }
 
+        // A3: adopt the first existing page as the current tab. External/user browser:
+        // adopt without reloading so the user's current page is never disturbed.
+        self.adopt_existing_page(&browser_arc, false).await;
+
         Ok(())
     }
 
@@ -1247,8 +1353,7 @@ impl BrowserClient {
         let page = self.get_or_create_page().await?;
         let page_guard = page.lock().await;
 
-        let before_url = page_guard
-            .url()
+        let before_url = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -1284,7 +1389,17 @@ impl BrowserClient {
                         NAVIGATE_LOAD_WAIT_SECS + NAVIGATE_DOM_READY_SECS
                     )));
                 }
-                page_still_loading = true;
+                // The DOM is usable; distinguish "fully loaded" (readyState complete —
+                // goto just didn't get to confirm the load event in time) from
+                // "interactive with subresources still pending" so the agent gets an
+                // accurate status instead of a blanket "still loading".
+                let ready = cdp(page_guard.evaluate("document.readyState"))
+                    .await
+                    .ok()
+                    .and_then(|r| r.into_value::<serde_json::Value>().ok())
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default();
+                page_still_loading = ready != "complete";
             }
         }
 
@@ -1322,6 +1437,12 @@ impl BrowserClient {
                 tracing::warn!(
                     "[Browser] AX tree snapshot returned empty, falling back to JS DOM traversal"
                 );
+            }
+            Err(e) if Self::is_connection_error(&e) => {
+                // CDP link unresponsive (page mid-navigation or half-dead): the JS DOM
+                // fallback hits the same evaluate and fails identically, doubling the
+                // wait for nothing. Surface the fast error instead.
+                return Err(e);
             }
             Err(e) => {
                 tracing::warn!(
@@ -1373,10 +1494,7 @@ impl BrowserClient {
             frame_id: None,
         };
 
-        let resp = page_guard
-            .execute(cmd)
-            .await
-            .map_err(cdp_err)?;
+        let resp = cdp(page_guard.execute(cmd)).await?;
 
         let nodes = resp
             .result
@@ -1502,10 +1620,7 @@ impl BrowserClient {
             )
         };
 
-        let result = page_guard
-            .evaluate(js)
-            .await
-            .map_err(cdp_err)?;
+        let result = cdp(page_guard.evaluate(js)).await?;
 
         let value: String = result
             .into_value()
@@ -1561,10 +1676,7 @@ impl BrowserClient {
                 }})()"#,
                 idx = idx
             );
-            page_guard
-                .evaluate(js)
-                .await
-            .map_err(cdp_err)?;
+            cdp(page_guard.evaluate(js)).await?;
             return Ok(format!("Clicked @e{}", idx));
         }
 
@@ -1572,9 +1684,12 @@ impl BrowserClient {
         // in-page async poll loop), then JS click to bypass chromiumoxide's
         // mouse-event path (which can hang on complex pages or when CDP timing is off)
         let js = Self::actionability_script(selector, "el.click(); return 'clicked';");
-        page_guard.evaluate(js).await.map_err(|e| {
-            cdp_err_ctx(&format!("Click on '{}' failed", selector), e)
-        })?;
+        cdp_ctx_with_timeout(
+            &format!("Click on '{}' failed", selector),
+            ACTIONABILITY_CDP_BUDGET,
+            page_guard.evaluate(js),
+        )
+        .await?;
         Ok(format!("Clicked element: {}", selector))
     }
 
@@ -1597,37 +1712,40 @@ impl BrowserClient {
 
         let (x, y) = self.element_center(&page_guard, selector).await?;
 
-        page_guard
-            .execute(DispatchMouseEventParams::new(
+        cdp_ctx(
+            "trusted click: mouseMoved failed",
+            page_guard.execute(DispatchMouseEventParams::new(
                 DispatchMouseEventType::MouseMoved,
                 x,
                 y,
-            ))
-            .await
-            .map_err(|e| cdp_err_ctx("trusted click: mouseMoved failed", e))?;
+            )),
+        )
+        .await?;
 
         let cmd = DispatchMouseEventParams::builder()
             .x(x)
             .y(y)
             .button(MouseButton::Left)
             .click_count(1);
-        page_guard
-            .execute(
-                cmd.clone()
-                    .r#type(DispatchMouseEventType::MousePressed)
-                    .build()
-                    .map_err(|e| BrowserError::Execution(format!("mousePressed build: {e}")))?,
-            )
-            .await
-            .map_err(|e| cdp_err_ctx("trusted click: mousePressed failed", e))?;
-        page_guard
-            .execute(
-                cmd.r#type(DispatchMouseEventType::MouseReleased)
-                    .build()
-                    .map_err(|e| BrowserError::Execution(format!("mouseReleased build: {e}")))?,
-            )
-            .await
-            .map_err(|e| cdp_err_ctx("trusted click: mouseReleased failed", e))?;
+        let pressed = cmd
+            .clone()
+            .r#type(DispatchMouseEventType::MousePressed)
+            .build()
+            .map_err(|e| BrowserError::Execution(format!("mousePressed build: {e}")))?;
+        cdp_ctx(
+            "trusted click: mousePressed failed",
+            page_guard.execute(pressed),
+        )
+        .await?;
+        let released = cmd
+            .r#type(DispatchMouseEventType::MouseReleased)
+            .build()
+            .map_err(|e| BrowserError::Execution(format!("mouseReleased build: {e}")))?;
+        cdp_ctx(
+            "trusted click: mouseReleased failed",
+            page_guard.execute(released),
+        )
+        .await?;
 
         Ok(format!("Clicked (trusted): {}", selector))
     }
@@ -1667,10 +1785,11 @@ impl BrowserClient {
                     return_by_value: Some(true),
                     await_promise: Some(true),
                 };
-                let resp = page
-                    .execute(cmd)
-                    .await
-                    .map_err(|e| cdp_err_ctx("element_center: callFunctionOn failed", e))?;
+                let resp = cdp_ctx(
+                    "element_center: callFunctionOn failed",
+                    page.execute(cmd),
+                )
+                .await?;
                 if let Some(details) = resp.result.get("exceptionDetails") {
                     let desc = details
                         .get("exception")
@@ -1711,10 +1830,11 @@ impl BrowserClient {
                     idx = idx,
                     CENTER_EXPR = CENTER_EXPR
                 );
-                let result = page
-                    .evaluate(js)
-                    .await
-                    .map_err(|e| cdp_err_ctx("element_center: evaluate failed", e))?;
+                let result = cdp_ctx(
+                    "element_center: evaluate failed",
+                    page.evaluate(js),
+                )
+                .await?;
                 result.into_value().map_err(|_| {
                     BrowserError::Execution(format!(
                         "element_center: unexpected return type for {}",
@@ -1731,10 +1851,12 @@ impl BrowserClient {
             // CSS selector path — reuse the auto-wait loop (presence + visible),
             // then return the center instead of clicking.
             let js = Self::actionability_script(selector, CENTER_EXPR);
-            let result = page
-                .evaluate(js)
-                .await
-                .map_err(|e| cdp_err_ctx("element_center: evaluate failed", e))?;
+            let result = cdp_ctx_with_timeout(
+                "element_center: evaluate failed",
+                ACTIONABILITY_CDP_BUDGET,
+                page.evaluate(js),
+            )
+            .await?;
             result.into_value().map_err(|_| {
                 BrowserError::Execution(format!(
                     "element_center: unexpected return type for {}",
@@ -1801,17 +1923,16 @@ impl BrowserClient {
                     }})()"#,
                     idx = idx,
                 );
-                page_guard
-                    .evaluate(js)
-                    .await
-                    .map_err(cdp_err)?;
+                cdp(page_guard.evaluate(js)).await?;
 
                 let input_cmd = InputInsertText {
                     text: text.to_string(),
                 };
-                page_guard.execute(input_cmd).await.map_err(|e| {
-                    cdp_err_ctx(&format!("Input.insertText on @e{}", idx), e)
-                })?;
+                cdp_ctx(
+                    &format!("Input.insertText on @e{}", idx),
+                    page_guard.execute(input_cmd),
+                )
+                .await?;
                 return Ok(format!("Typed '{}' into @e{}", text, idx));
             }
         }
@@ -1819,18 +1940,96 @@ impl BrowserClient {
         // CSS selector — auto-wait (presence + visible), then focus+clear via JS,
         // then Input.insertText for real input
         let js = Self::actionability_script(selector, "el.focus(); el.value=''; return true;");
-        page_guard.evaluate(js).await.map_err(|e| {
-            cdp_err_ctx(&format!("Type focus on '{}' failed", selector), e)
-        })?;
+        cdp_ctx_with_timeout(
+            &format!("Type focus on '{}' failed", selector),
+            ACTIONABILITY_CDP_BUDGET,
+            page_guard.evaluate(js),
+        )
+        .await?;
 
         let input_cmd = InputInsertText {
             text: text.to_string(),
         };
-        page_guard.execute(input_cmd).await.map_err(|e| {
-            cdp_err_ctx(&format!("Input.insertText on '{}'", selector), e)
-        })?;
+        cdp_ctx(
+            &format!("Input.insertText on '{}'", selector),
+            page_guard.execute(input_cmd),
+        )
+        .await?;
 
         Ok(format!("Typed '{}' into {}", text, selector))
+    }
+
+    /// Arm the in-page DOM-change detector. Call *before* a write action, then
+    /// `wait_for_change` after it to confirm the action took effect.
+    ///
+    /// Baseline captured: (1) a MutationObserver on the document subtree — any
+    /// childList/attribute/characterData mutation clears the flag; (2) the current
+    /// URL (a navigation is a change); (3) the focused element's value/text
+    /// (typing into a field is a change even on vanilla inputs that never mutate
+    /// the DOM tree). Any of the three differing from its baseline within the wait
+    /// window means the page reacted to the action.
+    pub async fn arm_change_detector(&self) -> Result<(), BrowserError> {
+        let page = self.get_page().await?;
+        let page_guard = page.lock().await;
+        const JS: &str = r#"(function() {
+            try { if (window.__nuphus_mut_obs) window.__nuphus_mut_obs.disconnect(); } catch (e) {}
+            window.__nuphus_mut_seen = false;
+            window.__nuphus_mut_url = location.href;
+            var ae = document.activeElement;
+            window.__nuphus_mut_val = ae ? (ae.value !== undefined ? ae.value : ae.textContent) : null;
+            window.__nuphus_mut_obs = new MutationObserver(function() { window.__nuphus_mut_seen = true; });
+            window.__nuphus_mut_obs.observe(document.documentElement, {
+                childList: true, subtree: true, attributes: true, characterData: true
+            });
+            return true;
+        })()"#;
+        cdp(page_guard.evaluate(JS)).await?;
+        Ok(())
+    }
+
+    /// Wait up to `timeout_ms` for the armed detector to observe a page change
+    /// (DOM mutation, URL change, or focused-element value change). Returns
+    /// `true` if a change was seen within the window, `false` if the page stayed
+    /// quiet the whole window.
+    ///
+    /// Post-action effect verification: a change within the window means the
+    /// action took effect; a quiet page strongly suggests it did not (dead or
+    /// covered element, wrong selector). A full navigation destroys the page
+    /// context mid-wait — that itself is a change, so it reports `true` rather
+    /// than a false "no effect".
+    pub async fn wait_for_change(&self, timeout_ms: u64) -> Result<bool, BrowserError> {
+        let page = self.get_page().await?;
+        let page_guard = page.lock().await;
+        let js = r#"(async function() {
+            var deadline = Date.now() + __TIMEOUT_MS__;
+            for (;;) {
+                if (window.__nuphus_mut_seen) return true;
+                if (location.href !== window.__nuphus_mut_url) return true;
+                var ae = document.activeElement;
+                var v = ae ? (ae.value !== undefined ? ae.value : ae.textContent) : null;
+                if (v !== window.__nuphus_mut_val) return true;
+                if (Date.now() >= deadline) return false;
+                await new Promise(function(r) { setTimeout(r, 100); });
+            }
+        })()"#
+        .replace("__TIMEOUT_MS__", &timeout_ms.to_string());
+        // Budget sits above the JS-side poll window: on a healthy page the JS
+        // resolves (true/false) inside its own deadline, and only a wedged CDP
+        // call (frozen renderer) hits the outer budget.
+        let budget = std::time::Duration::from_millis(timeout_ms + 2000);
+        match cdp_with_timeout(budget, page_guard.evaluate(js)).await {
+            Ok(res) => Ok(res.into_value::<bool>().unwrap_or(false)),
+            Err(e) => {
+                // Execution context destroyed mid-wait (full navigation), or the CDP
+                // connection went unresponsive: the page changed (or is gone), so treat
+                // the action as effective rather than erroring.
+                tracing::warn!(
+                    "[Browser] effect-change wait evaluate failed, treating as page changed: {}",
+                    e
+                );
+                Ok(true)
+            }
+        }
     }
 
     /// Build the in-page actionability script shared by the CSS path of
@@ -1924,9 +2123,7 @@ impl BrowserClient {
             await_promise: Some(true),
         };
 
-        let resp = page.execute(cmd).await.map_err(|e| {
-            cdp_err_ctx("Runtime.callFunctionOn failed", e)
-        })?;
+        let resp = cdp_ctx("Runtime.callFunctionOn failed", page.execute(cmd)).await?;
 
         // Check for JS exception in response
         if let Some(details) = resp.result.get("exceptionDetails") {
@@ -1965,10 +2162,7 @@ impl BrowserClient {
             await_promise: Some(true),
         };
 
-        let focus_resp = page
-            .execute(focus_cmd)
-            .await
-            .map_err(|e| cdp_err_ctx("Type focus failed", e))?;
+        let focus_resp = cdp_ctx("Type focus failed", page.execute(focus_cmd)).await?;
 
         if let Some(details) = focus_resp.result.get("exceptionDetails") {
             let desc = details
@@ -1988,9 +2182,7 @@ impl BrowserClient {
         let input_cmd = InputInsertText {
             text: text.to_string(),
         };
-        page.execute(input_cmd)
-            .await
-            .map_err(|e| BrowserError::Execution(format!("Input.insertText failed: {}", e)))?;
+        cdp_ctx("Input.insertText failed", page.execute(input_cmd)).await?;
 
         Ok(format!("Typed '{}' into {}", text, selector))
     }
@@ -2006,10 +2198,7 @@ impl BrowserClient {
             object_group: None,
         };
 
-        let resp = page
-            .execute(cmd)
-            .await
-            .map_err(|e| BrowserError::Execution(format!("DOM.resolveNode failed: {}", e)))?;
+        let resp = cdp_ctx("DOM.resolveNode failed", page.execute(cmd)).await?;
 
         let object_id_str = resp
             .result
@@ -2040,10 +2229,7 @@ impl BrowserClient {
 
         let helpers_js = include_str!("helpers.js");
 
-        page_guard
-            .evaluate(helpers_js)
-            .await
-            .map_err(|e| BrowserError::Execution(format!("Helper injection failed: {}", e)))?;
+        cdp_ctx("Helper injection failed", page_guard.evaluate(helpers_js)).await?;
 
         self.helpers_injected = true;
         Ok(())
@@ -2074,8 +2260,7 @@ impl BrowserClient {
         // resetting helpers_injected)
         let check_js =
             "typeof window.__nuphus !== 'undefined' && window.__nuphus._results !== undefined";
-        let helpers_present: bool = page_guard
-            .evaluate(check_js)
+        let helpers_present: bool = cdp(page_guard.evaluate(check_js))
             .await
             .map(|r| r.into_value().unwrap_or(false))
             .unwrap_or(false);
@@ -2189,7 +2374,7 @@ impl BrowserClient {
             events_enabled: Some(true),
         };
 
-        match page_guard.execute(cmd).await {
+        match cdp(page_guard.execute(cmd)).await {
             Ok(_) => {
                 tracing::info!("[Browser] Download dir set to: {}", download_path);
                 self.download_configured = true;
@@ -2257,8 +2442,7 @@ impl BrowserClient {
         let page_guard = page.lock().await;
 
         // Get current page URL for domain context
-        let current_url = page_guard
-            .url()
+        let current_url = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -2290,7 +2474,7 @@ impl BrowserClient {
                 expires: cookie.expires,
             };
 
-            match page_guard.execute(cmd).await {
+            match cdp(page_guard.execute(cmd)).await {
                 Ok(_) => imported += 1,
                 Err(_) => failed += 1,
             }
@@ -2378,10 +2562,7 @@ impl BrowserClient {
             mime_lit = mime_lit,
         );
 
-        let result = page_guard
-            .evaluate(js)
-            .await
-            .map_err(cdp_err)?;
+        let result = cdp(page_guard.evaluate(js)).await?;
 
         let value: String = result
             .into_value()
@@ -2407,10 +2588,7 @@ impl BrowserClient {
             }
         };
 
-        page_guard
-            .evaluate(js)
-            .await
-            .map_err(cdp_err)?;
+        cdp(page_guard.evaluate(js)).await?;
 
         Ok(format!("Scrolled {} by {}", direction, amount))
     }
@@ -2441,10 +2619,7 @@ impl BrowserClient {
             max_chars
         );
 
-        let result = page_guard
-            .evaluate(js)
-            .await
-            .map_err(cdp_err)?;
+        let result = cdp(page_guard.evaluate(js)).await?;
 
         let value: String = result
             .into_value()
@@ -2458,14 +2633,12 @@ impl BrowserClient {
         let page = self.get_page().await?;
         let page_guard = page.lock().await;
 
-        let data = page_guard
-            .screenshot(ScreenshotParams {
-                full_page: Some(true),
-                omit_background: None,
-                cdp_params: Default::default(),
-            })
-            .await
-            .map_err(cdp_err)?;
+        let data = cdp(page_guard.screenshot(ScreenshotParams {
+            full_page: Some(true),
+            omit_background: None,
+            cdp_params: Default::default(),
+        }))
+        .await?;
 
         if let Some(path) = path {
             std::fs::write(path, &data).map_err(BrowserError::Io)?;
@@ -2501,10 +2674,7 @@ impl BrowserClient {
             script.to_string()
         };
 
-        let result = page_guard
-            .evaluate(wrapped)
-            .await
-            .map_err(cdp_err)?;
+        let result = cdp(page_guard.evaluate(wrapped)).await?;
 
         let value = result.into_value().unwrap_or(serde_json::Value::Null);
 
@@ -2516,21 +2686,16 @@ impl BrowserClient {
         let page = self.get_page().await?;
         let page_guard = page.lock().await;
 
-        let before = page_guard
-            .url()
+        let before = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
 
-        page_guard
-            .evaluate("history.back()")
-            .await
-            .map_err(cdp_err)?;
+        cdp(page_guard.evaluate("history.back()")).await?;
 
         Self::wait_for_url_change(&*page_guard, &before).await?;
 
-        let url = page_guard
-            .url()
+        let url = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -2543,21 +2708,16 @@ impl BrowserClient {
         let page = self.get_page().await?;
         let page_guard = page.lock().await;
 
-        let before = page_guard
-            .url()
+        let before = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
 
-        page_guard
-            .evaluate("history.forward()")
-            .await
-            .map_err(cdp_err)?;
+        cdp(page_guard.evaluate("history.forward()")).await?;
 
         Self::wait_for_url_change(&*page_guard, &before).await?;
 
-        let url = page_guard
-            .url()
+        let url = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -2585,20 +2745,44 @@ impl BrowserClient {
             std::time::Instant::now() + std::time::Duration::from_secs(NAVIGATE_DOM_READY_SECS);
         let mut saw_loading = false;
         loop {
-            let ready = match page.evaluate("document.readyState").await {
-                Ok(res) => res
+            // Each probe is individually bounded: this is only reached after `goto` timed
+            // out, and a mid-navigation page can leave CDP unresponsive — an unbounded
+            // evaluate would hang past `deadline` (the deadline check happens after the
+            // await), turning a 12s fallback into the full 30s tool guard.
+            let ready = match tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                page.evaluate("document.readyState"),
+            )
+            .await
+            {
+                Ok(Ok(res)) => res
                     .into_value::<serde_json::Value>()
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_string))
                     .unwrap_or_default(),
-                Err(_) => String::new(),
+                _ => String::new(),
             };
             if ready == "loading" {
                 saw_loading = true;
             }
-            let url = page.url().await.unwrap_or_default().unwrap_or_default();
-            let dom_ready = ready == "interactive" || ready == "complete";
-            if dom_ready && (url != before_url || saw_loading) {
+            let url = match tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                page.url(),
+            )
+            .await
+            {
+                Ok(Ok(u)) => u.unwrap_or_default(),
+                _ => String::new(),
+            };
+            // "complete" is unambiguous — the document finished loading, no need to
+            // confirm a URL change (a navigate to the same URL reloads without the URL
+            // ever differing). "interactive" needs the confirmation that navigation
+            // actually started (URL changed or we saw the loading transition), otherwise
+            // the pre-navigation page's readyState could be mistaken for the new one.
+            if ready == "complete" {
+                return Ok(true);
+            }
+            if ready == "interactive" && (url != before_url || saw_loading) {
                 return Ok(true);
             }
             if std::time::Instant::now() >= deadline {
@@ -2618,7 +2802,18 @@ impl BrowserClient {
     async fn wait_for_url_change(page: &Page, before: &str) -> Result<(), BrowserError> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
-            let now = page.url().await.unwrap_or_default().unwrap_or_default();
+            // Bounded probe, same rationale as wait_for_dom_usable: a mid-navigation
+            // page can leave CDP unresponsive, and an unbounded url() would hang past
+            // the deadline, turning a 20s fallback into the full 30s tool guard.
+            let now = match tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                page.url(),
+            )
+            .await
+            {
+                Ok(Ok(u)) => u.unwrap_or_default(),
+                _ => String::new(),
+            };
             if now != before {
                 return Ok(());
             }
@@ -2655,7 +2850,7 @@ impl BrowserClient {
                 let timeout = std::time::Duration::from_millis(timeout_ms);
 
                 while start.elapsed() < timeout {
-                    match page_guard.find_element(selector).await {
+                    match cdp(page_guard.find_element(selector)).await {
                         Ok(_) => return Ok(format!("Element '{}' found", selector)),
                         Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
                     }
@@ -2691,15 +2886,12 @@ impl BrowserClient {
                     poll = ACTIONABILITY_POLL_MS,
                     want_visible = want_visible,
                 );
-                page_guard
-                    .evaluate(js)
-                    .await
-                    .map_err(|e| {
-                        BrowserError::ElementNotFound(
-                            selector.to_string(),
-                            format!("Timeout after {}ms waiting for state '{}'. Hint: run browser_snapshot to confirm page state ({})", timeout_ms, state, e),
-                        )
-                    })?;
+                cdp(page_guard.evaluate(js)).await.map_err(|e| {
+                    BrowserError::ElementNotFound(
+                        selector.to_string(),
+                        format!("Timeout after {}ms waiting for state '{}'. Hint: run browser_snapshot to confirm page state ({})", timeout_ms, state, e),
+                    )
+                })?;
                 Ok(format!("Element '{}' reached state '{}'", selector, state))
             }
             other => Err(BrowserError::Config(format!(
@@ -2714,10 +2906,7 @@ impl BrowserClient {
         let page = self.get_page().await?;
         let page_guard = page.lock().await;
 
-        let cookies = page_guard
-            .get_cookies()
-            .await
-            .map_err(cdp_err)?;
+        let cookies = cdp(page_guard.get_cookies()).await?;
 
         let values: Vec<serde_json::Value> = cookies
             .into_iter()
@@ -2749,8 +2938,7 @@ impl BrowserClient {
         let page = self.get_page().await?;
         let page_guard = page.lock().await;
 
-        let url = page_guard
-            .url()
+        let url = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -2767,10 +2955,7 @@ impl BrowserClient {
         }
         let cookie_str = format!("document.cookie = {}", js_string_literal(&cookie));
 
-        page_guard
-            .evaluate(cookie_str)
-            .await
-            .map_err(cdp_err)?;
+        cdp(page_guard.evaluate(cookie_str)).await?;
 
         Ok(format!("Set cookie: {}={} for {}", name, value, url))
     }
@@ -2914,7 +3099,7 @@ impl BrowserClient {
         // Enable DOM domain for the new tab and register the anti-detection script.
         {
             let page_guard = self.page.as_ref().unwrap().lock().await;
-            let _ = page_guard.execute(DOMEnable::default()).await;
+            let _ = cdp(page_guard.execute(DOMEnable::default())).await;
             let _ = Self::inject_anti_detection(&page_guard).await;
         }
 
@@ -2927,20 +3112,15 @@ impl BrowserClient {
         let browser = self.browser.as_ref().ok_or(BrowserError::NotStarted)?;
 
         let browser_guard = browser.lock().await;
-        let pages = browser_guard
-            .pages()
-            .await
-            .map_err(cdp_err)?;
+        let pages = cdp(browser_guard.pages()).await?;
 
         let mut tabs = Vec::new();
         for (i, page) in pages.iter().enumerate() {
-            let url = page
-                .url()
+            let url = cdp(page.url())
                 .await
                 .unwrap_or_default()
                 .unwrap_or_else(|| "about:blank".to_string());
-            let title = page
-                .get_title()
+            let title = cdp(page.get_title())
                 .await
                 .unwrap_or_default()
                 .unwrap_or_else(|| "Untitled".to_string());
@@ -2960,10 +3140,7 @@ impl BrowserClient {
         let browser = self.browser.as_ref().ok_or(BrowserError::NotStarted)?;
 
         let browser_guard = browser.lock().await;
-        let pages = browser_guard
-            .pages()
-            .await
-            .map_err(cdp_err)?;
+        let pages = cdp(browser_guard.pages()).await?;
 
         if index >= pages.len() {
             return Err(BrowserError::Execution(format!(
@@ -2982,8 +3159,7 @@ impl BrowserClient {
         // Different tab, different backendNodeId space — stale @N refs must not carry over.
         self.snapshot_backend_ids.clear();
 
-        let url = page
-            .url()
+        let url = cdp(page.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -2996,8 +3172,7 @@ impl BrowserClient {
         let page = self.get_page().await?;
         let page_guard = page.lock().await;
 
-        let url = page_guard
-            .url()
+        let url = cdp(page_guard.url())
             .await
             .unwrap_or_default()
             .unwrap_or_else(|| "about:blank".to_string());
@@ -3026,16 +3201,127 @@ impl BrowserClient {
         "#;
 
         // Apply to every future document, before its scripts run.
-        page.execute(AddScriptToEvaluateOnNewDocumentParams::new(STEALTH_SOURCE))
-            .await
-            .map_err(cdp_err)?;
+        cdp(page.execute(AddScriptToEvaluateOnNewDocumentParams::new(
+            STEALTH_SOURCE,
+        )))
+        .await?;
 
         // Also neutralize the document that is already loaded right now.
-        page.evaluate(STEALTH_SOURCE)
-            .await
-            .map_err(cdp_err)?;
+        cdp(page.evaluate(STEALTH_SOURCE)).await?;
 
         Ok(())
+    }
+
+    /// After attaching to a running Chrome, wait for its existing targets to become
+    /// page-attachable and adopt the first existing page as the current page.
+    ///
+    /// chromiumoxide's attach is asynchronous: `fetch_targets()` returns before the
+    /// `AttachToTarget` responses land, and `pages()` only yields pages whose target
+    /// `session_id` has been set — so right after attach `pages()` can be empty and
+    /// `self.page` stays `None`. `navigate` then falls back to `new_page("about:blank")`,
+    /// accumulating a fresh tab every time a later session reuses the same Chrome
+    /// (the tab leak observed on orphan reattach).
+    ///
+    /// Polling until the first page is attachable and adopting it fixes both:
+    ///  - `self.page` is initialized from the existing tab, so snapshot/click/type work
+    ///    immediately and `navigate` reuses the same tab instead of opening a new one;
+    ///  - `list_tabs`/`switch_tab` see the pre-existing tabs.
+    ///
+    /// `reload` refreshes the adopted page — used for a leftover/orphan instance (this
+    /// process's own profile). The refresh is a raw `Page.reload` command plus a bounded
+    /// wait for `readyState` to leave "loading": chromiumoxide's `Page::reload()` additionally
+    /// waits for the `load` event, which a page with blocked subresources would hang on.
+    /// An external/user browser is adopted without reloading, so the user's current page
+    /// is never disturbed. Best-effort: any failure here degrades to the previous behavior
+    /// (new tab on navigate) and must not fail the attach itself.
+    async fn adopt_existing_page(
+        &mut self,
+        browser_arc: &Arc<Mutex<Browser>>,
+        reload: bool,
+    ) {
+        // Attach sessions land asynchronously; poll until a page is attachable.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let first_page = loop {
+            let pages = match cdp(browser_arc.lock().await.pages()).await {
+                Ok(pages) => pages,
+                Err(_) => Vec::new(),
+            };
+            if !pages.is_empty() {
+                // Prefer a real content page: Chrome's startup tab (`about:blank` /
+                // `chrome://new-tab-page`) lists first and would snapshot empty, so skip
+                // internal pages and adopt the first actual document. Fall back to the
+                // first page if every tab is an internal page.
+                let mut content_page = None;
+                for p in &pages {
+                    let u = cdp(p.url()).await.ok().flatten().unwrap_or_default();
+                    if !is_internal_chrome_url(&u) {
+                        content_page = Some(p.clone());
+                        break;
+                    }
+                }
+                break Some(content_page.unwrap_or_else(|| pages[0].clone()));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let Some(page) = first_page else {
+            tracing::debug!("[Browser] no existing page to adopt after attach");
+            return;
+        };
+
+        let page_arc = Arc::new(Mutex::new(page));
+        self.page = Some(page_arc.clone()); // configure_download_dir below needs it set
+
+        if reload {
+            use chromiumoxide::cdp::browser_protocol::page::ReloadParams;
+            let guard = page_arc.lock().await;
+            if let Err(e) = cdp(guard.execute(ReloadParams::default())).await {
+                tracing::warn!("[Browser] reload of adopted page failed (leaving as-is): {e}");
+            }
+            drop(guard);
+            // Bounded wait for the reload to leave "loading" (the DOM is usable at
+            // "interactive"; a blocked-subresource page may never reach "complete").
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let ready = cdp(page_arc.lock().await.evaluate("document.readyState"))
+                    .await
+                    .ok()
+                    .and_then(|res| res.into_value::<serde_json::Value>().ok())
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default();
+                if !ready.is_empty() && ready != "loading" {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    tracing::warn!(
+                        "[Browser] adopted page still loading after reload; continuing anyway"
+                    );
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+
+        // Same setup as a freshly created page (see get_or_create_page): DOM domain +
+        // anti-detection script (covers snapshot DOM ops and bot-detection).
+        {
+            let guard = page_arc.lock().await;
+            let _ = cdp(guard.execute(DOMEnable::default())).await;
+            let _ = Self::inject_anti_detection(&guard).await;
+        }
+
+        // Download dir config on first page (same as get_or_create_page).
+        if !self.download_configured {
+            if let Err(e) = self.configure_download_dir().await {
+                tracing::warn!("[Browser] download dir config failed on adopted page: {e}");
+            }
+        }
+
+        // Different page, different backendNodeId space — stale @N refs must not carry over.
+        self.snapshot_backend_ids.clear();
+        tracing::info!("[Browser] adopted existing page as current tab");
     }
 
     async fn get_or_create_page(&mut self) -> Result<Arc<Mutex<Page>>, BrowserError> {
@@ -3058,7 +3344,7 @@ impl BrowserClient {
         // and register the anti-detection script (covers every page this instance creates).
         {
             let page_guard = page_arc.lock().await;
-            let _ = page_guard.execute(DOMEnable::default()).await;
+            let _ = cdp(page_guard.execute(DOMEnable::default())).await;
             let _ = Self::inject_anti_detection(&page_guard).await;
         }
 
@@ -3135,13 +3421,84 @@ fn cdp_err(e: chromiumoxide::error::CdpError) -> BrowserError {
     }
 }
 
-/// Same classification with operation context prefixed.
+/// Whether a page URL is a browser-internal page (startup tab, tooling surface)
+/// rather than a real document — used by `adopt_existing_page` to skip the empty
+/// `about:blank` / `chrome://new-tab-page` tabs Chrome opens at startup.
+fn is_internal_chrome_url(url: &str) -> bool {
+    url.is_empty()
+        || url.starts_with("about:")
+        || url.starts_with("chrome://")
+        || url.starts_with("devtools://")
+        || url.starts_with("edge://")
+}
+
+/// Run a single CDP evaluate/execute with a hard timeout budget.
+///
+/// The tool-level guard is 30s; without this wrapper a wedged CDP call (page
+/// mid-navigation, crashed renderer) hangs the whole tool for that long. On
+/// timeout the future is simply dropped — chromiumoxide tolerates an unanswered
+/// command — and the caller gets a fast `Connection` error.
+async fn cdp_with_timeout<T>(
+    budget: std::time::Duration,
+    fut: impl std::future::Future<Output = Result<T, chromiumoxide::error::CdpError>>,
+) -> Result<T, BrowserError> {
+    tokio::time::timeout(budget, fut)
+        .await
+        .map_err(|_| {
+            BrowserError::Connection(format!(
+                "CDP did not respond within {}s (page may be navigating or unresponsive)",
+                budget.as_secs()
+            ))
+        })?
+        .map_err(cdp_err)
+}
+
+/// Run a single CDP evaluate/execute with the standard [`CDP_CALL_TIMEOUT`]
+/// budget. Call sites that wrap a self-bounded JS wait (the actionability loop,
+/// the change detector) use [`cdp_with_timeout`] / [`cdp_ctx_with_timeout`]
+/// with a budget that exceeds the JS side, so the JS produces its own
+/// descriptive timeout error instead of being preempted by the tokio one.
+async fn cdp<T>(
+    fut: impl std::future::Future<Output = Result<T, chromiumoxide::error::CdpError>>,
+) -> Result<T, BrowserError> {
+    cdp_with_timeout(CDP_CALL_TIMEOUT, fut).await
+}
+
+/// Same classification with operation context prefixed (shared by [`cdp_ctx`]).
 fn cdp_err_ctx(ctx: &str, e: chromiumoxide::error::CdpError) -> BrowserError {
     if is_transport_cdp_error(&e) {
         BrowserError::Connection(format!("{ctx}: {e}"))
     } else {
         BrowserError::Execution(format!("{ctx}: {e}"))
     }
+}
+
+/// [`cdp_with_timeout`] with an operation context prefixed onto the error. The
+/// context is applied to both the CDP error and the timeout error, so a failing
+/// call reads like `Click on '#x' failed: CDP did not respond within 5s (...)`,
+/// and the transport-vs-business classification is preserved.
+async fn cdp_ctx_with_timeout<T>(
+    ctx: &str,
+    budget: std::time::Duration,
+    fut: impl std::future::Future<Output = Result<T, chromiumoxide::error::CdpError>>,
+) -> Result<T, BrowserError> {
+    tokio::time::timeout(budget, fut)
+        .await
+        .map_err(|_| {
+            BrowserError::Connection(format!(
+                "{ctx}: CDP did not respond within {}s (page may be navigating or unresponsive)",
+                budget.as_secs()
+            ))
+        })?
+        .map_err(|e| cdp_err_ctx(ctx, e))
+}
+
+/// [`cdp_ctx_with_timeout`] with the standard [`CDP_CALL_TIMEOUT`] budget.
+async fn cdp_ctx<T>(
+    ctx: &str,
+    fut: impl std::future::Future<Output = Result<T, chromiumoxide::error::CdpError>>,
+) -> Result<T, BrowserError> {
+    cdp_ctx_with_timeout(ctx, CDP_CALL_TIMEOUT, fut).await
 }
 
 /// Serialize a Rust string as a JavaScript string literal (double-quoted, fully
@@ -3516,6 +3873,73 @@ mod tests {
         cleanup_profile("reconnect");
     }
 
+    /// Regression: after attaching to a running Chrome (a leftover/orphan instance, or a
+    /// second process on the same profile), the existing page must be adopted as the
+    /// current tab — `list_tabs` non-empty, `snapshot` works immediately (not "No page
+    /// open"), and `navigate` reuses the same tab instead of accumulating a new one.
+    ///
+    /// Before the fix, chromiumoxide's attach is async (`fetch_targets` returns before the
+    /// `AttachToTarget` responses land, and `pages()` only yields pages whose `session_id`
+    /// is set), so `self.page` stayed `None` after attach and every `navigate` fell back to
+    /// `new_page("about:blank")`, growing the tab list on every reattach.
+    #[tokio::test]
+    #[ignore]
+    async fn attach_adopts_existing_page_real_chrome() {
+        // Instance A: a live Chrome with one page. Snapshot only lists interactive
+        // elements (buttons/links/inputs), so the fixture must contain one.
+        let mut a = isolated_client("adopt");
+        a.launch(true).await.expect("launch A");
+        a.navigate(&fixture_url(
+            "adopt",
+            "<!doctype html><html><body><button>page-a</button></body></html>",
+        ))
+        .await
+        .expect("navigate A");
+        assert!(
+            a.snapshot(false, None).await.unwrap().contains("page-a"),
+            "A's own page should snapshot its button"
+        );
+
+        // Instance B: same profile → try_attach connects to A's Chrome and adopts the
+        // existing page as the current tab.
+        let mut b = isolated_client("adopt");
+        b.launch(true).await.expect("launch B (attach)");
+
+        // list_tabs enumerates the pre-existing tab (was [] before the fix).
+        let tabs_before = b.list_tabs().await.expect("list_tabs after attach");
+        assert!(
+            !tabs_before.is_empty(),
+            "attach must enumerate existing tabs, got {tabs_before:?}"
+        );
+
+        // snapshot works immediately on the adopted page (was "No page open").
+        let snap = b.snapshot(false, None).await.expect("snapshot on adopted page");
+        assert!(
+            snap.contains("page-a"),
+            "adopted page should reflect the existing tab content, got: {snap}"
+        );
+
+        // navigate reuses the adopted tab — the tab count must not grow. Use a
+        // different URL than A (a same-URL navigate is a degenerate reload that
+        // exercises a different path; here we want the plain re-navigate case).
+        b.navigate(&fixture_url(
+            "adopt_b",
+            "<!doctype html><html><body><button>page-b</button></body></html>",
+        ))
+        .await
+        .expect("navigate on adopted page");
+        let tabs_after = b.list_tabs().await.expect("list_tabs after navigate");
+        assert_eq!(
+            tabs_before.len(),
+            tabs_after.len(),
+            "navigate must reuse the adopted tab, not open a new one: {tabs_after:?}"
+        );
+
+        b.close().await.expect("close B (attach, disconnect only)");
+        a.close().await.expect("close A (kills chrome)");
+        cleanup_profile("adopt");
+    }
+
     /// Test client with an isolated profile: avoids sharing the running Nuphus App's
     /// browser_profile_v2 (try_attach would connect to the App instance and hang navigate).
     /// Each test uses its own directory to avoid SingletonLock conflicts.
@@ -3562,6 +3986,10 @@ setTimeout(function() {
 setTimeout(function(){ document.getElementById('will-hide').remove(); }, 1000);
 setTimeout(function(){ document.getElementById('will-show').style.display = 'block'; }, 1500);
 </script>
+</body></html>"#;
+
+    const STATIC_PAGE: &str = r#"<!doctype html><html><body>
+<div id="static-node">static</div>
 </body></html>"#;
 
     /// Regression: a second operation on an established connection must not kill the page.
@@ -3682,13 +4110,14 @@ setTimeout(function(){ document.getElementById('will-show').style.display = 'blo
         let page = client.page.as_ref().expect("page exists").clone();
         {
             let guard = page.lock().await;
-            let heading = guard
-                .evaluate("document.querySelector('#main') ? document.querySelector('#main').textContent : ''")
-                .await
-                .ok()
-                .and_then(|r| r.into_value::<serde_json::Value>().ok())
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_default();
+            let heading = cdp(
+                guard.evaluate("document.querySelector('#main') ? document.querySelector('#main').textContent : ''"),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.into_value::<serde_json::Value>().ok())
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
             assert_eq!(
                 heading, "slow",
                 "DOM should be parsed and reachable on slow page"
@@ -3892,5 +4321,131 @@ setTimeout(function(){ document.getElementById('will-show').style.display = 'blo
 
         client.close().await.expect("close");
         cleanup_profile("batch");
+    }
+
+    // ── Post-action effect verification (arm_change_detector / wait_for_change) ──
+
+    /// A live DOM mutation within the wait window must be detected.
+    #[tokio::test]
+    #[ignore = "launches real Chrome; requires Chrome installed locally"]
+    async fn change_detector_detects_mutation_real_chrome() {
+        let mut client = isolated_client("changedet");
+        client.launch(true).await.expect("launch headless");
+        client
+            .navigate(&fixture_url("state", STATE_PAGE))
+            .await
+            .expect("navigate");
+
+        client.arm_change_detector().await.expect("arm");
+        let changed = client.wait_for_change(4000).await.expect("wait");
+        assert!(changed, "mutation at 1000/1500ms must be detected within 4s");
+
+        // STATE_PAGE has a second timer at 1500ms (display:block) — sleep past it so
+        // the re-armed detector observes a fully settled DOM.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        client.arm_change_detector().await.expect("re-arm");
+        let unchanged = client.wait_for_change(1500).await.expect("wait 2");
+        assert!(!unchanged, "no mutation after settle must report no change");
+
+        client.close().await.expect("close");
+        cleanup_profile("changedet");
+    }
+
+    /// No mutation, no URL change, no activeElement value change → false (negative path).
+    #[tokio::test]
+    #[ignore = "launches real Chrome; requires Chrome installed locally"]
+    async fn change_detector_false_without_mutation_real_chrome() {
+        let mut client = isolated_client("changeneg");
+        client.launch(true).await.expect("launch headless");
+        client
+            .navigate(&fixture_url("static", STATIC_PAGE))
+            .await
+            .expect("navigate");
+
+        client.arm_change_detector().await.expect("arm");
+        let changed = client.wait_for_change(2000).await.expect("wait");
+        assert!(!changed, "static page must not report a change");
+
+        client.close().await.expect("close");
+        cleanup_profile("changeneg");
+    }
+
+    /// The linkage that browser_click relies on: arm → click (side effect) → change detected.
+    #[tokio::test]
+    #[ignore = "launches real Chrome; requires Chrome installed locally"]
+    async fn change_detector_links_to_click_side_effect_real_chrome() {
+        let mut client = isolated_client("changeclick");
+        client.launch(true).await.expect("launch headless");
+        client
+            .navigate(&fixture_url("delayed", DELAYED_PAGE))
+            .await
+            .expect("navigate");
+
+        // Wait out the 1.2s delayed element injection so arming sees a settled DOM,
+        // then the click is the ONLY mutation the detector can observe.
+        tokio::time::sleep(std::time::Duration::from_millis(1400)).await;
+        client.arm_change_detector().await.expect("arm");
+        client
+            .click("#delayed-btn")
+            .await
+            .expect("click (auto-waits for element)");
+        let changed = client.wait_for_change(3000).await.expect("wait");
+        assert!(changed, "click's textContent mutation must be detected");
+
+        client.close().await.expect("close");
+        cleanup_profile("changeclick");
+    }
+
+    // ── dev_tools_active_port_url fallback (issue#2 fix) ──
+
+    #[tokio::test]
+    async fn dev_tools_fallback_returns_url_for_live_port() {
+        // Bind a real listener so the TCP liveness probe passes.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let dir = std::env::temp_dir().join("nuphus_devtools_fallback_live");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            format!("{port}\n/devtools/browser/abc\n"),
+        )
+        .unwrap();
+
+        let url = dev_tools_active_port_url(&dir).await;
+        assert_eq!(
+            url,
+            Some(format!("ws://127.0.0.1:{port}/devtools/browser/abc"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn dev_tools_fallback_rejects_dead_port() {
+        // A port nobody listens on → file exists but stale → must be rejected.
+        let dir = std::env::temp_dir().join("nuphus_devtools_fallback_dead");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("DevToolsActivePort"), "65530\n/devtools/browser/x\n").unwrap();
+
+        assert_eq!(dev_tools_active_port_url(&dir).await, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn dev_tools_fallback_rejects_garbage_and_missing() {
+        let dir = std::env::temp_dir().join("nuphus_devtools_fallback_garbage");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("DevToolsActivePort"), "not-a-port\n").unwrap();
+        assert_eq!(dev_tools_active_port_url(&dir).await, None);
+        std::fs::write(dir.join("DevToolsActivePort"), "0\n/devtools/browser/x\n").unwrap();
+        assert_eq!(dev_tools_active_port_url(&dir).await, None);
+        let missing = std::env::temp_dir().join("nuphus_devtools_fallback_missing");
+        let _ = std::fs::remove_dir_all(&missing);
+        std::fs::create_dir_all(&missing).unwrap();
+        assert_eq!(dev_tools_active_port_url(&missing).await, None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&missing);
     }
 }

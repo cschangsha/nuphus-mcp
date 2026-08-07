@@ -48,3 +48,20 @@ pub async fn get_or_launch(
         .map_err(|e| format!("Failed to launch browser: {}", e))?;
     Ok(guard)
 }
+
+/// Explicitly shut down the shared browser. Call before process exit.
+///
+/// The shared BrowserClient lives in a process-level `static` (`OnceLock`), and Rust statics are
+/// never dropped on process exit — so `kill_on_drop` on the Chrome child can never fire on its own,
+/// and a gracefully-exiting server would otherwise leave an orphaned Chrome holding the profile lock.
+/// This is the reliable cleanup path: close the CDP connection and kill a Chrome instance this
+/// process launched. An attached external/user browser is only disconnected, never killed.
+/// Bounded to 5s so a wedged CDP connection cannot block process shutdown.
+pub async fn shutdown_browser() {
+    let shared = shared_client();
+    let mut guard = shared.lock().await;
+    if let Some(client) = guard.as_mut() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), client.close()).await;
+    }
+    *guard = None;
+}

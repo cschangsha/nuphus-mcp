@@ -114,12 +114,26 @@ fn host_is_private(host: &str) -> bool {
     false
 }
 
+/// Post-action effect-verification window (ms) for write operations that can
+/// silently no-op (click/type). A change detected within this window means the
+/// action took effect; an unchanged page means it very likely did not.
+/// Default 15s; `NUPHUS_MCP_EFFECT_TIMEOUT_MS=0` disables the check entirely.
+fn effect_timeout_ms() -> u64 {
+    std::env::var("NUPHUS_MCP_EFFECT_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(15_000)
+}
+
 /// Execute a browser_* tool, returning a text result.
 pub async fn execute(name: &str, args: &Value) -> Result<String, String> {
     // Per-operation budget (same policy as the main crate's browser_tools.rs).
     let timeout_secs: u64 = match name {
         "browser_navigate" | "browser_back" | "browser_forward" => 30,
         "browser_exec" => 15,
+        // click/type additionally wait the effect-verification window after the
+        // action, so budget = action timeout + that window.
+        "browser_click" | "browser_type" => 15 + effect_timeout_ms() / 1000,
         "browser_wait_for" => {
             args.get("timeout_ms")
                 .and_then(Value::as_u64)
@@ -186,8 +200,30 @@ async fn run_op_with_reconnect(
     match tokio::time::timeout(timeout, run_op(client, name, args)).await {
         Ok(Ok(out)) => Ok(out),
         Ok(Err(e)) if BrowserClient::is_connection_error(&e) => {
+            // A connection-class error is either genuine transport death (handler task
+            // gone / websocket dropped) or a per-call CDP timeout on a slow or
+            // mid-navigation page (the cdp() budget, e.g. `navigate` timing out then a
+            // snapshot on the half-dead page). Distinguish before tearing the browser
+            // down — reconnect() relaunches Chrome and destroys every tab, so it must
+            // only run when the connection probe AND the child process both confirm
+            // death. A responsive link or a live process means the page is busy: return
+            // the error fast instead of killing a healthy browser for nothing.
+            if client.is_connection_alive().await {
+                return Err(format!(
+                    "Browser '{name}' failed with a connection error but the CDP connection is \
+                     still responsive ({e}); the page is likely busy or mid-navigation — retry \
+                     later"
+                ));
+            }
+            if client.child_process_alive() == Some(true) {
+                return Err(format!(
+                    "Browser '{name}' failed with a connection error and the CDP connection is \
+                     unresponsive, but the Chrome process is still alive ({e}); refusing to kill \
+                     a live browser — retry later."
+                ));
+            }
             tracing::warn!(
-                "[browser] CDP connection failed ({}), reconnecting",
+                "[browser] CDP connection failed and the Chrome process is gone ({}), reconnecting",
                 e
             );
             client
@@ -267,7 +303,10 @@ async fn run_op(
             // Auto-snapshot after navigation
             match client.snapshot(false, None).await {
                 Ok(snap) => format!("{}\n\n── Page state ──\n{}", result, snap),
-                Err(_) => result,
+                Err(e) => format!(
+                    "{}\n\n── Note: post-action snapshot failed; page state unavailable for the next step: {} ──",
+                    result, e
+                ),
             }
         }
         "browser_snapshot" => {
@@ -294,14 +333,35 @@ async fn run_op(
                 .get("trusted")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // Effect verification: arm the change detector before dispatching,
+            // then wait a window for the page to react. A click that changes
+            // nothing within the window very likely did not take effect (dead
+            // button / covered element / wrong selector) — surface it instead of
+            // letting the next step proceed on a false "clicked" premise.
+            let effect_timeout = effect_timeout_ms();
+            if effect_timeout > 0 {
+                client.arm_change_detector().await?;
+            }
             let result = if trusted {
                 client.click_trusted(selector).await?
             } else {
                 client.click(selector).await?
             };
+            if effect_timeout > 0 && !client.wait_for_change(effect_timeout).await? {
+                return Err(BrowserError::Execution(format!(
+                    "Click on '{}' executed but no DOM change was detected within {}ms — the click \
+                     likely did not take effect (dead/covered element, wrong selector, or an \
+                     effect that doesn't mutate this page such as opening a new tab). Verify the \
+                     page state with browser_snapshot / browser_list_tabs before the next step.",
+                    selector, effect_timeout
+                )));
+            }
             match client.snapshot(false, None).await {
                 Ok(snap) => format!("{}\n\n── Page state ──\n{}", result, snap),
-                Err(_) => result,
+                Err(e) => format!(
+                    "{}\n\n── Note: post-action snapshot failed; page state unavailable for the next step: {} ──",
+                    result, e
+                ),
             }
         }
         "browser_type" => {
@@ -311,10 +371,27 @@ async fn run_op(
                 .or_else(|| args.get("ref").and_then(Value::as_str))
                 .unwrap_or("");
             let text = args.get("text").and_then(Value::as_str).unwrap_or("");
+            // Effect verification (same contract as click): arm before typing,
+            // then confirm the field actually received the text within the window.
+            let effect_timeout = effect_timeout_ms();
+            if effect_timeout > 0 {
+                client.arm_change_detector().await?;
+            }
             let result = client.type_text(selector, text).await?;
+            if effect_timeout > 0 && !client.wait_for_change(effect_timeout).await? {
+                return Err(BrowserError::Execution(format!(
+                    "Typed into '{}' but no change was detected within {}ms — the input likely did \
+                     not accept the text (covered/read-only element, wrong selector, or a locked \
+                     page). Verify the field value with browser_snapshot before the next step.",
+                    selector, effect_timeout
+                )));
+            }
             match client.snapshot(false, None).await {
                 Ok(snap) => format!("{}\n\n── Page state ──\n{}", result, snap),
-                Err(_) => result,
+                Err(e) => format!(
+                    "{}\n\n── Note: post-action snapshot failed; page state unavailable for the next step: {} ──",
+                    result, e
+                ),
             }
         }
         "browser_scroll" => {
@@ -514,5 +591,38 @@ mod tests {
         assert!(host_is_private("fd00::1"));
         assert!(!host_is_private("203.0.113.9"));
         assert!(!host_is_private("example.com"));
+    }
+
+    /// Effect-verification window defaults to 15s, is overridable via env, and
+    /// degrades to the default on garbage input. `0` disables the check.
+    #[test]
+    fn effect_timeout_default_and_override() {
+        let _lock = crate::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var("NUPHUS_MCP_EFFECT_TIMEOUT_MS").ok();
+
+        // Default 15s.
+        std::env::remove_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS");
+        assert_eq!(effect_timeout_ms(), 15_000);
+
+        // Explicit override.
+        std::env::set_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS", "5000");
+        assert_eq!(effect_timeout_ms(), 5_000);
+
+        // 0 disables the check.
+        std::env::set_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS", "0");
+        assert_eq!(effect_timeout_ms(), 0);
+
+        // Garbage / negative / empty fall back to the default.
+        for bad in ["abc", "-1", ""] {
+            std::env::set_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS", bad);
+            assert_eq!(effect_timeout_ms(), 15_000, "garbage input {bad:?} must fall back");
+        }
+
+        match saved {
+            Some(v) => std::env::set_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS", v),
+            None => std::env::remove_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS"),
+        }
     }
 }
