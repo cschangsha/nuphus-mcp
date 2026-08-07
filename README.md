@@ -1,6 +1,6 @@
 # nuphus-mcp
 
-**Desktop automation MCP server — computer use for any AI agent. See the screen, control windows/mouse/keyboard, and drive Chrome over the Model Context Protocol (stdio). Desktop & browser automation need no API key; OCR runs locally; vision plugs into your own vision LLM (OpenAI-compatible, BYOK).**
+**Desktop automation MCP server — computer use for any AI agent. See the screen, control windows/mouse/keyboard, and drive Chrome over the Model Context Protocol (stdio). Desktop & browser automation need no API key; OCR runs locally; vision plugs into your own vision LLM (OpenAI-compatible or Anthropic native, BYOK).**
 
 `nuphus-mcp` is a lightweight, cross-platform **desktop automation MCP server**
 that exposes desktop + browser automation as standard MCP tools. It speaks
@@ -33,9 +33,10 @@ key; local OCR is built in; vision works with your own vision LLM
   keyboard input/hotkey, clipboard write/clean — implemented on the
   `desktop-api` crate (xcap + Win32, no Tauri dependency).
 - **Computer vision pair**: `desktop_vision` (BYOK — send a screenshot to your
-  own vision model via an OpenAI-compatible API) + `desktop_perceive` (local
-  OCR with PaddleOCR, models auto-downloaded on first run; optional YOLO icon
-  detection). Used together they give AI agents **both semantic understanding
+  own vision model via an OpenAI-compatible or Anthropic native API) +
+  `desktop_perceive` (local OCR with PaddleOCR, models auto-downloaded on first
+  run; optional YOLO icon detection). Used together they give AI agents **both
+  semantic understanding
   and pixel-precise coordinates** — the battle-tested vision→perceive flow from
   the Nuphus desktop app. See [TOOLS.md](TOOLS.md) for BYOK env vars, model
   setup, and the recommended flow.
@@ -78,18 +79,24 @@ nuphus-mcp/
 
 ## API Keys & Local Models
 
-### Vision — BYOK, OpenAI-compatible
+### Vision — BYOK, OpenAI-compatible or Anthropic native
 
-`desktop_vision` uses **your own** vision model through an OpenAI-compatible
-Chat Completions endpoint. Nothing is required unless you call this tool — and
-when it is not configured the tool returns a clear error instead of silently
-failing.
+`desktop_vision` uses **your own** vision model. It speaks two protocols:
+- **OpenAI-compatible** Chat Completions (default) — works with OpenAI, MiniMax, Qwen, Ollama, vLLM, …
+- **Anthropic native** Messages API — point `NUPHUS_MCP_VISION_BASE_URL` at
+  `https://api.anthropic.com/v1` and the protocol is auto-detected from the host;
+  or force it with `NUPHUS_MCP_VISION_PROVIDER=anthropic`.
+
+Nothing is required unless you call this tool — and when it is not configured
+the tool returns a clear error instead of silently failing.
 
 | Environment variable | Required | Default | Description |
 |----------------------|----------|---------|-------------|
 | `NUPHUS_MCP_VISION_API_KEY` | ✅ | — | API key for your vision model |
-| `NUPHUS_MCP_VISION_BASE_URL` | — | `https://api.openai.com/v1` | OpenAI-compatible base URL |
-| `NUPHUS_MCP_VISION_MODEL` | ✅ | — | Model id, e.g. `gpt-4o-mini`, `qwen-vl-max` |
+| `NUPHUS_MCP_VISION_BASE_URL` | — | `https://api.openai.com/v1` | Base URL (`https://api.anthropic.com/v1` for Claude) |
+| `NUPHUS_MCP_VISION_MODEL` | ✅ | — | Model id, e.g. `gpt-4o-mini`, `qwen-vl-max`, `claude-sonnet-4-5` |
+| `NUPHUS_MCP_VISION_PROVIDER` | — | `auto` | `auto` \| `openai` \| `anthropic`; `auto` infers from the base URL host |
+| `NUPHUS_MCP_VISION_MAX_TOKENS` | — | `1024` | Max output tokens (Zhipu GLM-4V-Flash caps at 1024; raise for text-heavy screenshots) |
 
 ### External browser (anti-detect / fingerprint browsers)
 

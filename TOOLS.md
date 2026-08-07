@@ -106,21 +106,35 @@ return a JSON-RPC `error`.
 
 ### `desktop_vision` — BYOK (bring your own key)
 
-`desktop_vision` sends a screenshot to **your own** vision model through an
-OpenAI-compatible Chat Completions endpoint (`image_url` content). Nothing is
-required unless you call it — and when it is not configured the tool returns
-`isError: true` with a clear message naming the missing variable.
+`desktop_vision` sends a screenshot to **your own** vision model. It supports
+two protocols:
+- **OpenAI-compatible** Chat Completions (default) — `image_url` content; works
+  with OpenAI, MiniMax, Qwen, Ollama, vLLM, …
+- **Anthropic native** Messages API — set `NUPHUS_MCP_VISION_BASE_URL` to
+  `https://api.anthropic.com/v1` and the protocol is auto-detected from the host
+  (or force it with `NUPHUS_MCP_VISION_PROVIDER=anthropic`).
+
+Nothing is required unless you call it — and when it is not configured the tool
+returns `isError: true` with a clear message naming the missing variable.
 
 | Environment variable | Required | Default | Description |
 |----------------------|----------|---------|-------------|
 | `NUPHUS_MCP_VISION_API_KEY` | **yes** | — | API key for your vision model |
-| `NUPHUS_MCP_VISION_BASE_URL` | no | `https://api.openai.com/v1` | OpenAI-compatible base URL |
-| `NUPHUS_MCP_VISION_MODEL` | **yes** | — | Model id, e.g. `gpt-4o-mini`, `qwen-vl-max` |
+| `NUPHUS_MCP_VISION_BASE_URL` | no | `https://api.openai.com/v1` | Base URL (`https://api.anthropic.com/v1` for Claude) |
+| `NUPHUS_MCP_VISION_MODEL` | **yes** | — | Model id, e.g. `gpt-4o-mini`, `qwen-vl-max`, `claude-sonnet-4-5` |
+| `NUPHUS_MCP_VISION_PROVIDER` | no | `auto` | `auto` \| `openai` \| `anthropic`; `auto` infers from the base URL host |
+| `NUPHUS_MCP_VISION_MAX_TOKENS` | no | `1024` | Max output tokens (Zhipu GLM-4V-Flash caps at 1024; raise for text-heavy screenshots) |
 
 ```sh
+# OpenAI-compatible provider (default)
 set NUPHUS_MCP_VISION_API_KEY=sk-...
 set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 # optional: set NUPHUS_MCP_VISION_BASE_URL=https://your-gateway/v1
+
+# Anthropic / Claude — provider is auto-detected from the base URL
+set NUPHUS_MCP_VISION_API_KEY=sk-ant-...
+set NUPHUS_MCP_VISION_BASE_URL=https://api.anthropic.com/v1
+set NUPHUS_MCP_VISION_MODEL=claude-sonnet-4-5
 ```
 
 ### `desktop_perceive` — local OCR + YOLO models
@@ -322,8 +336,10 @@ window class. Read-only.
 
 ### desktop_vision
 
-Understand a screenshot with **your own** vision model (BYOK, OpenAI-compatible
-API). Requires `NUPHUS_MCP_VISION_API_KEY` and `NUPHUS_MCP_VISION_MODEL`; see
+Understand a screenshot with **your own** vision model (BYOK — OpenAI-compatible
+or Anthropic native). Requires `NUPHUS_MCP_VISION_API_KEY` and
+`NUPHUS_MCP_VISION_MODEL`; the protocol is auto-detected from the base URL (or
+forced via `NUPHUS_MCP_VISION_PROVIDER`). See
 [Vision & Local Models](#vision--local-models). If `path` is omitted the full
 screen is captured first.
 

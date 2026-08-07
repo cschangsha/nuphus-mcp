@@ -15,7 +15,7 @@
 ## Features
 
 - **Desktop automation** (15 tools): screen size, screenshot (PNG/base64), window list/activate/screenshot/**move/resize/info**, mouse click/drag/scroll/position, keyboard input/hotkey, clipboard write/clean — implemented on the `desktop-api` crate (xcap + Win32, no Tauri dependency).
-- **Computer vision** (2 tools): `desktop_vision` (BYOK — send a screenshot to your own vision model via OpenAI-compatible API) and `desktop_perceive` (local OCR + YOLO element location with PaddleOCR, models auto-downloaded on first run).
+- **Computer vision** (2 tools): `desktop_vision` (BYOK — send a screenshot to your own vision model via an OpenAI-compatible or Anthropic native API) and `desktop_perceive` (local OCR + YOLO element location with PaddleOCR, models auto-downloaded on first run).
 - **Browser automation** (21 tools): navigate, snapshot (accessibility tree with `@N` refs), click, type, exec, scroll, extract, screenshot, evaluate, back/forward, wait_for, cookies get/set/import, upload, tabs, downloads — implemented on `nuphus-browser` (chromiumoxide CDP, shared with the Nuphus main app).
 - **Zero-cost stdio**: no HTTP server, no daemon. The process reads single-line JSON from stdin and writes responses to stdout.
 - **Safety-first**: destructive tools are annotated per the MCP spec; optional strict-confirm mode; path validation for screenshot/upload.
@@ -38,23 +38,35 @@
 
 ## API Keys & Local Models
 
-### Vision — BYOK, OpenAI-compatible
+### Vision — BYOK, OpenAI-compatible or Anthropic native
 
-`desktop_vision` uses **your own** vision model through an OpenAI-compatible
-Chat Completions endpoint. Nothing is required unless you call this tool — and
-when it is not configured the tool returns a clear error instead of silently
-failing.
+`desktop_vision` uses **your own** vision model. It speaks two protocols:
+- **OpenAI-compatible** Chat Completions (default) — works with OpenAI, MiniMax, Qwen, Ollama, vLLM, …
+- **Anthropic native** Messages API — point `NUPHUS_MCP_VISION_BASE_URL` at
+  `https://api.anthropic.com/v1` and the protocol is auto-detected from the host;
+  or force it with `NUPHUS_MCP_VISION_PROVIDER=anthropic`.
+
+Nothing is required unless you call this tool — and when it is not configured
+the tool returns a clear error instead of silently failing.
 
 | Environment variable | Required | Default | Description |
 |----------------------|----------|---------|-------------|
 | `NUPHUS_MCP_VISION_API_KEY` | ✅ | — | API key for your vision model |
-| `NUPHUS_MCP_VISION_BASE_URL` | — | `https://api.openai.com/v1` | OpenAI-compatible base URL |
-| `NUPHUS_MCP_VISION_MODEL` | ✅ | — | Model id, e.g. `gpt-4o-mini`, `qwen-vl-max` |
+| `NUPHUS_MCP_VISION_BASE_URL` | — | `https://api.openai.com/v1` | Base URL (`https://api.anthropic.com/v1` for Claude) |
+| `NUPHUS_MCP_VISION_MODEL` | ✅ | — | Model id, e.g. `gpt-4o-mini`, `qwen-vl-max`, `claude-sonnet-4-5` |
+| `NUPHUS_MCP_VISION_PROVIDER` | — | `auto` | `auto` \| `openai` \| `anthropic`; `auto` infers from the base URL host |
+| `NUPHUS_MCP_VISION_MAX_TOKENS` | — | `1024` | Max output tokens (Zhipu GLM-4V-Flash caps at 1024; raise for text-heavy screenshots) |
 
 ```sh
+# OpenAI-compatible provider (default)
 set NUPHUS_MCP_VISION_API_KEY=sk-...
 set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 # optional: set NUPHUS_MCP_VISION_BASE_URL=https://your-gateway/v1
+
+# Anthropic / Claude — provider is auto-detected from the base URL
+set NUPHUS_MCP_VISION_API_KEY=sk-ant-...
+set NUPHUS_MCP_VISION_BASE_URL=https://api.anthropic.com/v1
+set NUPHUS_MCP_VISION_MODEL=claude-sonnet-4-5
 ```
 
 ### Perceive models (local, auto-downloaded)

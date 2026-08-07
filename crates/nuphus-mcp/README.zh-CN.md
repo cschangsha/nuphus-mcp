@@ -15,7 +15,7 @@
 ## 特性
 
 - **桌面自动化（15 个工具）**：屏幕分辨率、截图（PNG/base64）、窗口列表、窗口激活、窗口截图、**窗口移动/缩放/信息查询**、鼠标点击/拖拽/滚轮/定位、键盘输入/快捷键、剪贴板写入/清空 —— 基于 `desktop-api` crate（xcap + Win32），不依赖 Tauri。
-- **计算机视觉（2 个工具）**：`desktop_vision`（BYOK —— 截图发送到你自己的视觉模型，OpenAI 兼容 API）与 `desktop_perceive`（本地 OCR + YOLO 元素定位，PaddleOCR，首次运行自动下载模型）。
+- **计算机视觉（2 个工具）**：`desktop_vision`（BYOK —— 截图发送到你自己的视觉模型，OpenAI 兼容或 Anthropic 原生 API）与 `desktop_perceive`（本地 OCR + YOLO 元素定位，PaddleOCR，首次运行自动下载模型）。
 - **浏览器自动化（21 个工具）**：导航、快照（无障碍树 `@N` 引用）、点击、输入、批量脚本、滚动、正文提取、截图、JS 执行、前进/后退、等待、Cookie 读写/导入、文件上传、标签页、下载目录 —— 基于 `nuphus-browser`（chromiumoxide CDP，与 Nuphus 主程序共用）。
 - **零成本 stdio**：无 HTTP 服务、无常驻进程。进程从 stdin 读单行 JSON，向 stdout 写响应。
 - **安全优先**：破坏性工具按 MCP 规范标注；可选严格确认模式；截图/上传路径校验。
@@ -40,19 +40,32 @@
 
 ### 视觉理解（可选，BYOK）
 
-`desktop_vision` 使用**你自己的**视觉模型（OpenAI 兼容 Chat Completions）。
+`desktop_vision` 使用**你自己的**视觉模型，支持两种协议：
+- **OpenAI 兼容** Chat Completions（默认）——适用于 OpenAI、MiniMax、通义、Ollama、vLLM 等；
+- **Anthropic 原生** Messages API——把 `NUPHUS_MCP_VISION_BASE_URL` 指向
+  `https://api.anthropic.com/v1` 即可，协议从 host 自动识别；也可用
+  `NUPHUS_MCP_VISION_PROVIDER=anthropic` 显式指定。
+
 不调用该工具就不需要任何配置；未配置时工具返回明确错误，不会静默失败。
 
 | 环境变量 | 必填 | 默认值 | 说明 |
 |----------|------|--------|------|
 | `NUPHUS_MCP_VISION_API_KEY` | ✅ | — | 视觉模型 API Key |
-| `NUPHUS_MCP_VISION_BASE_URL` | — | `https://api.openai.com/v1` | OpenAI 兼容 base URL |
-| `NUPHUS_MCP_VISION_MODEL` | ✅ | — | 模型 ID，如 `gpt-4o-mini`、`qwen-vl-max` |
+| `NUPHUS_MCP_VISION_BASE_URL` | — | `https://api.openai.com/v1` | base URL（Claude 用 `https://api.anthropic.com/v1`） |
+| `NUPHUS_MCP_VISION_MODEL` | ✅ | — | 模型 ID，如 `gpt-4o-mini`、`qwen-vl-max`、`claude-sonnet-4-5` |
+| `NUPHUS_MCP_VISION_PROVIDER` | — | `auto` | `auto` \| `openai` \| `anthropic`；`auto` 按 base URL host 自动识别 |
+| `NUPHUS_MCP_VISION_MAX_TOKENS` | — | `1024` | 最大输出 token 数（智谱 GLM-4V-Flash 上限 1024；文本多时可调大） |
 
 ```sh
+# OpenAI 兼容（默认）
 set NUPHUS_MCP_VISION_API_KEY=sk-...
 set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 # 可选：set NUPHUS_MCP_VISION_BASE_URL=https://your-gateway/v1
+
+# Anthropic / Claude —— 从 base URL 自动识别协议
+set NUPHUS_MCP_VISION_API_KEY=sk-ant-...
+set NUPHUS_MCP_VISION_BASE_URL=https://api.anthropic.com/v1
+set NUPHUS_MCP_VISION_MODEL=claude-sonnet-4-5
 ```
 
 ### perceive 模型（本地，自动下载）

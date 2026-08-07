@@ -100,20 +100,33 @@
 
 ### `desktop_vision` — BYOK（自带 Key）
 
-`desktop_vision` 把截图发送到**你自己的**视觉模型（OpenAI 兼容 Chat
-Completions 端点，`image_url` 内容）。不调用该工具就不需要任何配置；未配置时
-工具返回 `isError: true` 并明确点名缺失的环境变量。
+`desktop_vision` 把截图发送到**你自己的**视觉模型，支持两种协议：
+- **OpenAI 兼容** Chat Completions（默认，`image_url` 内容）——适用于 OpenAI、
+  MiniMax、通义、Ollama、vLLM 等；
+- **Anthropic 原生** Messages API——把 `NUPHUS_MCP_VISION_BASE_URL` 指向
+  `https://api.anthropic.com/v1` 即可自动识别协议（或显式
+  `NUPHUS_MCP_VISION_PROVIDER=anthropic`）。
+
+不调用该工具就不需要任何配置；未配置时工具返回 `isError: true` 并明确点名缺失的环境变量。
 
 | 环境变量 | 必填 | 默认值 | 说明 |
 |----------|------|--------|------|
 | `NUPHUS_MCP_VISION_API_KEY` | **是** | — | 视觉模型 API Key |
-| `NUPHUS_MCP_VISION_BASE_URL` | 否 | `https://api.openai.com/v1` | OpenAI 兼容 base URL |
-| `NUPHUS_MCP_VISION_MODEL` | **是** | — | 模型 ID，如 `gpt-4o-mini`、`qwen-vl-max` |
+| `NUPHUS_MCP_VISION_BASE_URL` | 否 | `https://api.openai.com/v1` | base URL（Claude 用 `https://api.anthropic.com/v1`） |
+| `NUPHUS_MCP_VISION_MODEL` | **是** | — | 模型 ID，如 `gpt-4o-mini`、`qwen-vl-max`、`claude-sonnet-4-5` |
+| `NUPHUS_MCP_VISION_PROVIDER` | 否 | `auto` | `auto` \| `openai` \| `anthropic`；`auto` 按 base URL host 自动识别 |
+| `NUPHUS_MCP_VISION_MAX_TOKENS` | 否 | `1024` | 最大输出 token 数（智谱 GLM-4V-Flash 上限 1024；文本多时可调大） |
 
 ```sh
+# OpenAI 兼容（默认）
 set NUPHUS_MCP_VISION_API_KEY=sk-...
 set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 # 可选：set NUPHUS_MCP_VISION_BASE_URL=https://your-gateway/v1
+
+# Anthropic / Claude —— 从 base URL 自动识别协议
+set NUPHUS_MCP_VISION_API_KEY=sk-ant-...
+set NUPHUS_MCP_VISION_BASE_URL=https://api.anthropic.com/v1
+set NUPHUS_MCP_VISION_MODEL=claude-sonnet-4-5
 ```
 
 ### `desktop_perceive` — 本地 OCR + YOLO 模型
@@ -304,8 +317,9 @@ set NUPHUS_MCP_VISION_MODEL=qwen-vl-max
 
 ### desktop_vision
 
-用**你自己的**视觉模型理解截图（BYOK，OpenAI 兼容 API）。需要
-`NUPHUS_MCP_VISION_API_KEY` 与 `NUPHUS_MCP_VISION_MODEL`，见
+用**你自己的**视觉模型理解截图（BYOK —— OpenAI 兼容或 Anthropic 原生）。需要
+`NUPHUS_MCP_VISION_API_KEY` 与 `NUPHUS_MCP_VISION_MODEL`；协议按 base URL
+自动识别（或用 `NUPHUS_MCP_VISION_PROVIDER` 指定），见
 [视觉与本地模型](#视觉与本地模型)。未传 `path` 时先截全屏。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
