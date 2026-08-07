@@ -265,7 +265,9 @@ async fn window_info(args: &Value) -> Result<String, String> {
 /// desktop_vision — BYOK cloud vision understanding.
 ///
 /// Reads `NUPHUS_MCP_VISION_API_KEY` / `NUPHUS_MCP_VISION_BASE_URL` /
-/// `NUPHUS_MCP_VISION_MODEL`; missing key → clear error. Auto-captures a screenshot when `path` is omitted.
+/// `NUPHUS_MCP_VISION_MODEL` / `NUPHUS_MCP_VISION_PROVIDER` (auto|openai|anthropic,
+/// auto-detected from the base URL host); missing key → clear error.
+/// Auto-captures a screenshot when `path` is omitted.
 async fn vision(args: &Value) -> Result<String, String> {
     let prompt = args.get("prompt").and_then(Value::as_str);
     // `_temp` keeps the temp-PNG guard alive until the vision call completes.
