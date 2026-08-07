@@ -5,6 +5,35 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-08-07
+
+### Added
+
+- **Anthropic native vision backend** — `desktop_vision` can now talk to Claude
+  (and any Anthropic Messages API endpoint) natively. Set `NUPHUS_MCP_VISION_PROVIDER`
+  to `auto` (default), `openai`, or `anthropic`. In `auto` mode the provider is
+  inferred from the base URL: an endpoint whose host contains `anthropic` is sent
+  the native `/v1/messages` protocol with `x-api-key` + `anthropic-version:
+  2023-06-01` headers and a real `image`/`source` base64 block; everything else
+  keeps the OpenAI-compatible `image_url` path. (Anthropic's OpenAI-compat layer
+  does not convert `image_url` blocks, so Claude requires the native protocol —
+  merely pointing a base URL at `api.anthropic.com` used to fail or silently drop
+  the image.)
+- **Configurable vision `max_tokens`** — new `NUPHUS_MCP_VISION_MAX_TOKENS` env var
+  (default **1024**, validated `1..=32768`). Previously hardcoded, the value is the
+  request parameter that Chinese OpenAI-compatible vision models (Zhipu GLM-4V-Flash
+  et al.) cap at 1024 — exceeding it returns HTTP 400. Defaulting to 1024 makes
+  BYOK vision work against all those providers out of the box.
+
+### Fixed
+
+- **Unified CDP timeouts** — every CDP call now runs under a single 5-second budget
+  through one `cdp()` wrapper. The old per-command hardcoded 30s could make a
+  half-dead page hang `snapshot`/`click` for 15s+ before erroring; those now
+  fast-fail in ~5s with actionable errors. A connection error on `snapshot` no
+  longer silently falls back to a JS eval that reports a false "empty page", and a
+  reconnect race can no longer kill a live browser while trying to verify one.
+
 ## [0.1.9] - 2026-08-06
 
 ### Added
