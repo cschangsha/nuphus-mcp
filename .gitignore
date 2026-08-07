@@ -31,3 +31,7 @@ dist/
 # Compiled binaries inside platform packages — copied by CI/local, never committed.
 npm/packages/nuphus-mcp-*/bin/*
 !npm/packages/nuphus-mcp-*/bin/.gitkeep
+
+# Local MCP test driver (hardcoded dev paths)
+mcp_drive.py
+mcp_drive_stderr.log
