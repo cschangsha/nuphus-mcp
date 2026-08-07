@@ -528,9 +528,9 @@ async fn input(args: &Value) -> Result<String, String> {
                 }
                 .await;
                 let restore_warning = match &prev {
-                    Some(saved) => desktop_api::clipboard::write_text(saved).err().map(|e| {
-                        format!("paste done but clipboard restore failed: {e}")
-                    }),
+                    Some(saved) => desktop_api::clipboard::write_text(saved)
+                        .err()
+                        .map(|e| format!("paste done but clipboard restore failed: {e}")),
                     None => {
                         tracing::warn!(
                             "[desktop_input] previous clipboard content was not text \

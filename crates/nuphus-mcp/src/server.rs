@@ -255,10 +255,7 @@ impl McpServer {
 /// handles across await points on some platforms (e.g. macOS enigo's
 /// `NonNull<CGEventSource>`). Catching unwinds on the current task gives the
 /// same panic isolation without a `Send` bound.
-async fn execute_tool_isolated(
-    name: String,
-    args: Value,
-) -> Result<tools::ToolOutput, String> {
+async fn execute_tool_isolated(name: String, args: Value) -> Result<tools::ToolOutput, String> {
     use futures_util::FutureExt;
     let log_name = name.clone();
     let fut = std::panic::AssertUnwindSafe(tools::execute(&name, &args));
@@ -930,7 +927,10 @@ mod tests {
             .expect("explicit null id must NOT be swallowed as a notification");
         let v = parse(&resp);
         assert_eq!(v["id"], Value::Null);
-        assert!(v.get("result").is_some(), "null-id request answered: {resp}");
+        assert!(
+            v.get("result").is_some(),
+            "null-id request answered: {resp}"
+        );
     }
 
     #[tokio::test]

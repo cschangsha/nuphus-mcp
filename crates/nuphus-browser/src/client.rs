@@ -605,7 +605,8 @@ async fn dev_tools_active_port_url(profile: &std::path::Path) -> Option<String> 
 /// Windows (the persisted path and the running process path may differ in case).
 fn same_exe(a: &std::path::Path, b: &std::path::Path) -> bool {
     if cfg!(windows) {
-        a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
     } else {
         a == b
     }
@@ -1148,7 +1149,9 @@ impl BrowserClient {
                 // Legacy config (URL only, no identity): no self-heal possible —
                 // guide the user to re-pick the window in the settings page.
                 None => {
-                    return Err(BrowserError::Launch(attach_failure_message(&base, None, None)));
+                    return Err(BrowserError::Launch(attach_failure_message(
+                        &base, None, None,
+                    )));
                 }
             };
 
@@ -1217,16 +1220,15 @@ impl BrowserClient {
                  --remote-debugging-port and check NUPHUS_MCP_BROWSER_CDP_URL"
             ))
         })?;
-        let body: serde_json::Value = resp.json().await.map_err(|e| {
-            BrowserError::Launch(format!("{base}/json/version: invalid JSON: {e}"))
-        })?;
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| BrowserError::Launch(format!("{base}/json/version: invalid JSON: {e}")))?;
         let ws_url = body
             .get("webSocketDebuggerUrl")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                BrowserError::Launch(format!(
-                    "{base}/json/version: missing webSocketDebuggerUrl"
-                ))
+                BrowserError::Launch(format!("{base}/json/version: missing webSocketDebuggerUrl"))
             })?
             .to_string();
 
@@ -1785,11 +1787,8 @@ impl BrowserClient {
                     return_by_value: Some(true),
                     await_promise: Some(true),
                 };
-                let resp = cdp_ctx(
-                    "element_center: callFunctionOn failed",
-                    page.execute(cmd),
-                )
-                .await?;
+                let resp =
+                    cdp_ctx("element_center: callFunctionOn failed", page.execute(cmd)).await?;
                 if let Some(details) = resp.result.get("exceptionDetails") {
                     let desc = details
                         .get("exception")
@@ -1830,11 +1829,7 @@ impl BrowserClient {
                     idx = idx,
                     CENTER_EXPR = CENTER_EXPR
                 );
-                let result = cdp_ctx(
-                    "element_center: evaluate failed",
-                    page.evaluate(js),
-                )
-                .await?;
+                let result = cdp_ctx("element_center: evaluate failed", page.evaluate(js)).await?;
                 result.into_value().map_err(|_| {
                     BrowserError::Execution(format!(
                         "element_center: unexpected return type for {}",
@@ -2012,7 +2007,7 @@ impl BrowserClient {
                 await new Promise(function(r) { setTimeout(r, 100); });
             }
         })()"#
-        .replace("__TIMEOUT_MS__", &timeout_ms.to_string());
+            .replace("__TIMEOUT_MS__", &timeout_ms.to_string());
         // Budget sits above the JS-side poll window: on a healthy page the JS
         // resolves (true/false) inside its own deadline, and only a wedged CDP
         // call (frozen renderer) hits the outer budget.
@@ -2765,15 +2760,11 @@ impl BrowserClient {
             if ready == "loading" {
                 saw_loading = true;
             }
-            let url = match tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                page.url(),
-            )
-            .await
-            {
-                Ok(Ok(u)) => u.unwrap_or_default(),
-                _ => String::new(),
-            };
+            let url =
+                match tokio::time::timeout(std::time::Duration::from_secs(1), page.url()).await {
+                    Ok(Ok(u)) => u.unwrap_or_default(),
+                    _ => String::new(),
+                };
             // "complete" is unambiguous — the document finished loading, no need to
             // confirm a URL change (a navigate to the same URL reloads without the URL
             // ever differing). "interactive" needs the confirmation that navigation
@@ -2805,15 +2796,11 @@ impl BrowserClient {
             // Bounded probe, same rationale as wait_for_dom_usable: a mid-navigation
             // page can leave CDP unresponsive, and an unbounded url() would hang past
             // the deadline, turning a 20s fallback into the full 30s tool guard.
-            let now = match tokio::time::timeout(
-                std::time::Duration::from_secs(1),
-                page.url(),
-            )
-            .await
-            {
-                Ok(Ok(u)) => u.unwrap_or_default(),
-                _ => String::new(),
-            };
+            let now =
+                match tokio::time::timeout(std::time::Duration::from_secs(1), page.url()).await {
+                    Ok(Ok(u)) => u.unwrap_or_default(),
+                    _ => String::new(),
+                };
             if now != before {
                 return Ok(());
             }
@@ -3201,10 +3188,7 @@ impl BrowserClient {
         "#;
 
         // Apply to every future document, before its scripts run.
-        cdp(page.execute(AddScriptToEvaluateOnNewDocumentParams::new(
-            STEALTH_SOURCE,
-        )))
-        .await?;
+        cdp(page.execute(AddScriptToEvaluateOnNewDocumentParams::new(STEALTH_SOURCE))).await?;
 
         // Also neutralize the document that is already loaded right now.
         cdp(page.evaluate(STEALTH_SOURCE)).await?;
@@ -3234,11 +3218,7 @@ impl BrowserClient {
     /// An external/user browser is adopted without reloading, so the user's current page
     /// is never disturbed. Best-effort: any failure here degrades to the previous behavior
     /// (new tab on navigate) and must not fail the attach itself.
-    async fn adopt_existing_page(
-        &mut self,
-        browser_arc: &Arc<Mutex<Browser>>,
-        reload: bool,
-    ) {
+    async fn adopt_existing_page(&mut self, browser_arc: &Arc<Mutex<Browser>>, reload: bool) {
         // Attach sessions land asynchronously; poll until a page is attachable.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
         let first_page = loop {
@@ -3565,20 +3545,20 @@ mod tests {
     #[test]
     fn connection_error_classification() {
         // Structured transport variant → reconnectable
-        assert!(BrowserClient::is_connection_error(&BrowserError::Connection(
-            "send failed because receiver is gone".to_string()
-        )));
+        assert!(BrowserClient::is_connection_error(
+            &BrowserError::Connection("send failed because receiver is gone".to_string())
+        ));
         // String fallback: only handler-specific phrasing classifies
-        assert!(BrowserClient::is_connection_error(&BrowserError::Execution(
-            "send failed because receiver is gone".to_string()
-        )));
+        assert!(BrowserClient::is_connection_error(
+            &BrowserError::Execution("send failed because receiver is gone".to_string())
+        ));
         assert!(BrowserClient::is_connection_error(&BrowserError::Execution(
             "Browser 'browser_extract' failed: Execution error: send failed because receiver is gone"
                 .to_string()
         )));
-        assert!(BrowserClient::is_connection_error(&BrowserError::Execution(
-            "channel closed while waiting for response".to_string()
-        )));
+        assert!(BrowserClient::is_connection_error(
+            &BrowserError::Execution("channel closed while waiting for response".to_string())
+        ));
         // Page-spoofable phrasing must NOT classify, even in the fallback — a page
         // throwing Error("WebSocket disconnected") used to kill a healthy browser.
         for spoof in [
@@ -3594,13 +3574,15 @@ mod tests {
             );
         }
         // Business errors → NOT reconnectable (must not mask the real problem)
-        assert!(!BrowserClient::is_connection_error(&BrowserError::ElementNotFound(
-            "@9".to_string(),
-            "@9 out of range (max @4)".to_string()
-        )));
-        assert!(!BrowserClient::is_connection_error(&BrowserError::Execution(
-            "Click on '#x' failed: selector not found".to_string()
-        )));
+        assert!(!BrowserClient::is_connection_error(
+            &BrowserError::ElementNotFound(
+                "@9".to_string(),
+                "@9 out of range (max @4)".to_string()
+            )
+        ));
+        assert!(!BrowserClient::is_connection_error(
+            &BrowserError::Execution("Click on '#x' failed: selector not found".to_string())
+        ));
         assert!(!BrowserClient::is_connection_error(&BrowserError::Navigation(
             "navigation timed out after 22s — page did not finish loading (unreachable host, blocked subresources, or very slow)".to_string()
         )));
@@ -3699,7 +3681,11 @@ mod tests {
         // port lands in <user-data-dir>/DevToolsActivePort (first line).
         let dir = std::env::temp_dir().join(format!("nuphus-heal-dap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("DevToolsActivePort"), "54738\n/devtools/browser/abc\n").unwrap();
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            "54738\n/devtools/browser/abc\n",
+        )
+        .unwrap();
         assert_eq!(resolve_debug_port(0, Some(&dir)), Some(54738));
         // Literal port is returned as-is; random port without profile is unresolvable.
         assert_eq!(resolve_debug_port(9222, None), Some(9222));
@@ -3717,10 +3703,19 @@ mod tests {
             Some(&ExternalHeal::ProcessNotFound),
         );
         assert!(msg.contains("AdsPower"), "names the browser: {msg}");
-        assert!(msg.contains("没有运行中的窗口"), "states the window is closed: {msg}");
-        assert!(msg.contains("连接会自动恢复"), "promises auto-recovery: {msg}");
+        assert!(
+            msg.contains("没有运行中的窗口"),
+            "states the window is closed: {msg}"
+        );
+        assert!(
+            msg.contains("连接会自动恢复"),
+            "promises auto-recovery: {msg}"
+        );
         assert!(msg.contains("不要切换浏览器"), "forbids switching: {msg}");
-        assert!(msg.contains("不要修改配置"), "forbids config changes: {msg}");
+        assert!(
+            msg.contains("不要修改配置"),
+            "forbids config changes: {msg}"
+        );
         assert!(msg.contains("不要盲目重试"), "forbids blind retries: {msg}");
         assert!(
             !msg.contains("--remote-debugging-port"),
@@ -3737,7 +3732,10 @@ mod tests {
         );
         assert!(msg.contains("AdsPower"), "names the browser: {msg}");
         assert!(msg.contains("调试端口无响应"), "states the cause: {msg}");
-        assert!(msg.contains("重新打开"), "guides reopening the window: {msg}");
+        assert!(
+            msg.contains("重新打开"),
+            "guides reopening the window: {msg}"
+        );
         assert!(msg.contains("不要切换浏览器"), "forbids switching: {msg}");
     }
 
@@ -3746,10 +3744,19 @@ mod tests {
         // Legacy config (URL only): no self-heal possible — guide the user to
         // re-pick the window in the settings page; never suggest managed Chrome.
         let msg = attach_failure_message("http://127.0.0.1:9222", None, None);
-        assert!(msg.contains("http://127.0.0.1:9222"), "shows the endpoint: {msg}");
+        assert!(
+            msg.contains("http://127.0.0.1:9222"),
+            "shows the endpoint: {msg}"
+        );
         assert!(msg.contains("设置页"), "guides to the settings page: {msg}");
-        assert!(msg.contains("重新检测并选择"), "guides re-picking the window: {msg}");
-        assert!(msg.contains("不要切换到内置浏览器"), "forbids managed fallback: {msg}");
+        assert!(
+            msg.contains("重新检测并选择"),
+            "guides re-picking the window: {msg}"
+        );
+        assert!(
+            msg.contains("不要切换到内置浏览器"),
+            "forbids managed fallback: {msg}"
+        );
         assert!(
             !msg.contains("--remote-debugging-port"),
             "developer detail stays out of the message: {msg}"
@@ -3852,7 +3859,10 @@ mod tests {
 
         // ...and reconnect() resets, relaunches, restores a blank page; the retried
         // operation succeeds instead of failing with NoPage / dead connection.
-        client.reconnect().await.expect("reconnect after dead connection");
+        client
+            .reconnect()
+            .await
+            .expect("reconnect after dead connection");
         let recovered = client.snapshot(false, None).await;
         assert!(
             recovered.is_ok(),
@@ -3913,7 +3923,10 @@ mod tests {
         );
 
         // snapshot works immediately on the adopted page (was "No page open").
-        let snap = b.snapshot(false, None).await.expect("snapshot on adopted page");
+        let snap = b
+            .snapshot(false, None)
+            .await
+            .expect("snapshot on adopted page");
         assert!(
             snap.contains("page-a"),
             "adopted page should reflect the existing tab content, got: {snap}"
@@ -4338,7 +4351,10 @@ setTimeout(function(){ document.getElementById('will-show').style.display = 'blo
 
         client.arm_change_detector().await.expect("arm");
         let changed = client.wait_for_change(4000).await.expect("wait");
-        assert!(changed, "mutation at 1000/1500ms must be detected within 4s");
+        assert!(
+            changed,
+            "mutation at 1000/1500ms must be detected within 4s"
+        );
 
         // STATE_PAGE has a second timer at 1500ms (display:block) — sleep past it so
         // the re-armed detector observes a fully settled DOM.
@@ -4426,7 +4442,11 @@ setTimeout(function(){ document.getElementById('will-show').style.display = 'blo
         let dir = std::env::temp_dir().join("nuphus_devtools_fallback_dead");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("DevToolsActivePort"), "65530\n/devtools/browser/x\n").unwrap();
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            "65530\n/devtools/browser/x\n",
+        )
+        .unwrap();
 
         assert_eq!(dev_tools_active_port_url(&dir).await, None);
         let _ = std::fs::remove_dir_all(&dir);

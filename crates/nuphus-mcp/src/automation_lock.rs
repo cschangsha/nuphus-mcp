@@ -156,9 +156,11 @@ impl AutomationLock {
                 }
             }
         }
-        Err("automation lock contention: could not acquire after reclaiming a stale lock; \
+        Err(
+            "automation lock contention: could not acquire after reclaiming a stale lock; \
              retry later."
-            .to_string())
+                .to_string(),
+        )
     }
 
     /// Path of the lock file (exposed for tests / diagnostics).
@@ -231,7 +233,10 @@ fn publish_new(path: &Path, record: &LockRecord) -> Result<bool, String> {
             .truncate(true)
             .open(&tmp)
             .map_err(|e| format!("automation lock tmp create failed: {e}"))?;
-        if let Err(e) = file.write_all(payload.as_bytes()).and_then(|_| file.sync_all()) {
+        if let Err(e) = file
+            .write_all(payload.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
             let _ = fs::remove_file(&tmp);
             return Err(format!("automation lock write failed: {e}"));
         }
@@ -410,7 +415,10 @@ mod tests {
             .acquire("browser_click")
             .expect_err("second acquire busy");
         assert!(err.contains("busy"), "error mentions busy: {err}");
-        assert!(err.contains("desktop_mouse"), "error names the holding tool");
+        assert!(
+            err.contains("desktop_mouse"),
+            "error names the holding tool"
+        );
     }
 
     #[test]
@@ -477,7 +485,11 @@ mod tests {
                 name.contains(".tmp.") || name.contains(".renew.") || name.contains(".release.")
             })
             .collect();
-        assert!(leftovers.is_empty(), "scratch files leaked: {:?}", leftovers);
+        assert!(
+            leftovers.is_empty(),
+            "scratch files leaked: {:?}",
+            leftovers
+        );
     }
 
     #[test]

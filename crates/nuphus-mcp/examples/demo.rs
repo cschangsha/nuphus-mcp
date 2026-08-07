@@ -208,10 +208,14 @@ fn main() -> Result<(), String> {
     // 4. tools/call: harmless browser operation.
     // URL scheme whitelist only allows http/https (data: was rejected by the
     // security boundary once the whitelist shipped) — use the standard example domain.
-    let resp = client.call(3, "tools/call", serde_json::json!({
-        "name": "browser_navigate",
-        "arguments": { "url": "https://example.com" }
-    }))?;
+    let resp = client.call(
+        3,
+        "tools/call",
+        serde_json::json!({
+            "name": "browser_navigate",
+            "arguments": { "url": "https://example.com" }
+        }),
+    )?;
     let nav = text_of(&resp);
     let first_line = nav
         .lines()

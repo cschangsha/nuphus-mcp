@@ -3,7 +3,7 @@
 use crate::core::*;
 
 #[cfg(windows)]
-use ::windows::Win32::Foundation::{GlobalFree, HGLOBAL, HANDLE, HWND};
+use ::windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 #[cfg(windows)]
 use ::windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,

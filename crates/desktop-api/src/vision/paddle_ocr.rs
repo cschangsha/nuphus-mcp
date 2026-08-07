@@ -36,7 +36,11 @@ pub fn ensure_ort_dylib() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let mut dirs = exe.parent().map(|p| p.to_path_buf()).into_iter().collect::<Vec<_>>();
+    let mut dirs = exe
+        .parent()
+        .map(|p| p.to_path_buf())
+        .into_iter()
+        .collect::<Vec<_>>();
     // Cargo puts test binaries in deps/ one level below the dylib.
     if let Some(parent) = exe.parent().and_then(|p| p.parent()) {
         dirs.push(parent.to_path_buf());
@@ -78,7 +82,9 @@ static SHARED_OCR: std::sync::Mutex<Option<PaddleOcr>> = std::sync::Mutex::new(N
 impl PaddleOcr {
     /// Run `f` with the process-wide shared engine, initializing it on first use
     /// and rebuilding it when the resolved models directory changed.
-    pub fn with_shared<R>(f: impl FnOnce(&mut PaddleOcr) -> Result<R, String>) -> Result<R, String> {
+    pub fn with_shared<R>(
+        f: impl FnOnce(&mut PaddleOcr) -> Result<R, String>,
+    ) -> Result<R, String> {
         let mut guard = SHARED_OCR.lock().unwrap_or_else(|e| e.into_inner());
         let dir = Self::models_dir()?;
         let rebuild = match guard.as_ref() {

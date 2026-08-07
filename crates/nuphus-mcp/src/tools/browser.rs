@@ -145,9 +145,12 @@ pub async fn execute(name: &str, args: &Value) -> Result<String, String> {
     };
     // Outer total budget: one operation + reconnect probe (3s) + Chrome relaunch (~10s) + one retry.
     let total_budget = timeout_secs + 25;
-    tokio::time::timeout(Duration::from_secs(total_budget), run_tool(name, args, timeout_secs))
-        .await
-        .map_err(|_| format!("Browser '{}' timed out after {}s", name, total_budget))?
+    tokio::time::timeout(
+        Duration::from_secs(total_budget),
+        run_tool(name, args, timeout_secs),
+    )
+    .await
+    .map_err(|_| format!("Browser '{}' timed out after {}s", name, total_budget))?
 }
 
 /// Hold the lock while executing a specific tool (exclusive browser access, avoid interleaving with other consumers).
@@ -241,9 +244,7 @@ async fn run_op_with_reconnect(
             }
             tokio::time::timeout(timeout, run_op(client, name, args))
                 .await
-                .map_err(|_| {
-                    format!("Browser '{name}' retry timed out after {timeout_secs}s")
-                })?
+                .map_err(|_| format!("Browser '{name}' retry timed out after {timeout_secs}s"))?
                 .map_err(|e| e.to_string())
         }
         Ok(Err(e)) => Err(e.to_string()),
@@ -280,9 +281,7 @@ async fn run_op_with_reconnect(
             }
             tokio::time::timeout(timeout, run_op(client, name, args))
                 .await
-                .map_err(|_| {
-                    format!("Browser '{name}' retry timed out after {timeout_secs}s")
-                })?
+                .map_err(|_| format!("Browser '{name}' retry timed out after {timeout_secs}s"))?
                 .map_err(|e| e.to_string())
         }
     }
@@ -415,7 +414,10 @@ async fn run_op(
             client.screenshot(Some(path)).await?
         }
         "browser_extract" => {
-            let max_chars = args.get("max_chars").and_then(Value::as_u64).unwrap_or(8000) as usize;
+            let max_chars = args
+                .get("max_chars")
+                .and_then(Value::as_u64)
+                .unwrap_or(8000) as usize;
             client.extract(max_chars).await?
         }
         "browser_close" => {
@@ -445,8 +447,14 @@ async fn run_op(
         "browser_forward" => client.forward().await?,
         "browser_wait_for" => {
             let selector = args.get("selector").and_then(Value::as_str).unwrap_or("");
-            let state = args.get("state").and_then(Value::as_str).unwrap_or("attached");
-            let timeout_ms = args.get("timeout_ms").and_then(Value::as_u64).unwrap_or(5000);
+            let state = args
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("attached");
+            let timeout_ms = args
+                .get("timeout_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(5000);
             client.wait_for(selector, timeout_ms, state).await?
         }
         "browser_upload" => {
@@ -458,8 +466,7 @@ async fn run_op(
                 ));
             }
             // Security boundary: the file to upload must really exist
-            crate::security::validate_upload_file(file_path)
-                .map_err(BrowserError::Execution)?;
+            crate::security::validate_upload_file(file_path).map_err(BrowserError::Execution)?;
             client.upload_file(selector, file_path).await?
         }
         "browser_list_downloads" => client.list_downloads()?,
@@ -481,7 +488,11 @@ async fn run_op(
             let index = args.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
             client.switch_tab(index).await?
         }
-        _ => return Err(BrowserError::Execution(format!("Unknown browser tool: {name}"))),
+        _ => {
+            return Err(BrowserError::Execution(format!(
+                "Unknown browser tool: {name}"
+            )))
+        }
     };
 
     Ok(output)
@@ -530,7 +541,10 @@ mod tests {
         // Writes and navigation are NOT auto-retried (double-execution hazard).
         for write in EXECUTABLE_BROWSER_TOOLS {
             if !READ_ONLY_BROWSER_TOOLS.contains(write) {
-                assert!(!is_read_only_tool(write), "{write} must not be auto-retried");
+                assert!(
+                    !is_read_only_tool(write),
+                    "{write} must not be auto-retried"
+                );
             }
         }
         // Deliberately excluded despite being idempotent-looking (form resubmit).
@@ -581,7 +595,10 @@ mod tests {
 
     #[test]
     fn nav_host_parsing() {
-        assert_eq!(nav_host("https://example.com/path"), Some("example.com".into()));
+        assert_eq!(
+            nav_host("https://example.com/path"),
+            Some("example.com".into())
+        );
         assert_eq!(
             nav_host("http://user:pw@127.0.0.1:8080/x"),
             Some("127.0.0.1".into())
@@ -617,7 +634,11 @@ mod tests {
         // Garbage / negative / empty fall back to the default.
         for bad in ["abc", "-1", ""] {
             std::env::set_var("NUPHUS_MCP_EFFECT_TIMEOUT_MS", bad);
-            assert_eq!(effect_timeout_ms(), 15_000, "garbage input {bad:?} must fall back");
+            assert_eq!(
+                effect_timeout_ms(),
+                15_000,
+                "garbage input {bad:?} must fall back"
+            );
         }
 
         match saved {

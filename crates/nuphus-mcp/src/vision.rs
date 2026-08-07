@@ -124,12 +124,9 @@ impl VisionConfig {
         // providers — Zhipu GLM-4V-Flash rejects anything above 1024 with a 400). Configurable so
         // text-heavy screenshots can request more from providers that allow it (Claude, GPT-4o, …).
         let max_tokens = match std::env::var("NUPHUS_MCP_VISION_MAX_TOKENS") {
-            Ok(s) => s
-                .trim()
-                .parse::<u32>()
-                .map_err(|_| format!(
-                    "NUPHUS_MCP_VISION_MAX_TOKENS must be a positive integer, got: {s}"
-                ))?,
+            Ok(s) => s.trim().parse::<u32>().map_err(|_| {
+                format!("NUPHUS_MCP_VISION_MAX_TOKENS must be a positive integer, got: {s}")
+            })?,
             Err(_) => 1024,
         };
         if max_tokens == 0 || max_tokens > 32768 {
@@ -220,9 +217,9 @@ fn provider_headers(provider: VisionProvider, api_key: &str) -> Vec<(String, Str
             ("x-api-key".into(), api_key.into()),
             ("anthropic-version".into(), "2023-06-01".into()),
         ],
-        VisionProvider::OpenAI | VisionProvider::Auto => vec![
-            ("authorization".into(), format!("Bearer {api_key}")),
-        ],
+        VisionProvider::OpenAI | VisionProvider::Auto => {
+            vec![("authorization".into(), format!("Bearer {api_key}"))]
+        }
     }
 }
 
@@ -428,7 +425,10 @@ mod tests {
         assert_eq!(cfg.model, "gpt-4o-mini");
         assert_eq!(cfg.base_url, "https://api.openai.com/v1");
         assert_eq!(cfg.provider, VisionProvider::OpenAI);
-        assert_eq!(cfg.max_tokens, 1024, "default must be the 1024 compat floor");
+        assert_eq!(
+            cfg.max_tokens, 1024,
+            "default must be the 1024 compat floor"
+        );
     }
 
     #[test]
@@ -516,7 +516,10 @@ mod tests {
             err.contains("NUPHUS_MCP_VISION_PROVIDER"),
             "error must name the env var: {err}"
         );
-        assert!(err.contains("auto|openai|anthropic"), "error must list options: {err}");
+        assert!(
+            err.contains("auto|openai|anthropic"),
+            "error must list options: {err}"
+        );
     }
 
     #[test]
@@ -526,10 +529,16 @@ mod tests {
         key_model();
         std::env::set_var("NUPHUS_MCP_VISION_MAX_TOKENS", "1024");
         let cfg = VisionConfig::from_env().expect("ok");
-        assert_eq!(cfg.max_tokens, 1024, "explicit 1024 (Zhipu GLM-4V-Flash cap) accepted");
+        assert_eq!(
+            cfg.max_tokens, 1024,
+            "explicit 1024 (Zhipu GLM-4V-Flash cap) accepted"
+        );
         std::env::set_var("NUPHUS_MCP_VISION_MAX_TOKENS", "4096");
         let cfg = VisionConfig::from_env().expect("ok");
-        assert_eq!(cfg.max_tokens, 4096, "higher values allowed for providers that support them");
+        assert_eq!(
+            cfg.max_tokens, 4096,
+            "higher values allowed for providers that support them"
+        );
     }
 
     #[test]
@@ -545,10 +554,16 @@ mod tests {
         );
         std::env::set_var("NUPHUS_MCP_VISION_MAX_TOKENS", "0");
         let err = VisionConfig::from_env().expect_err("0 must fail");
-        assert!(err.contains("1..=32768"), "error must state the range: {err}");
+        assert!(
+            err.contains("1..=32768"),
+            "error must state the range: {err}"
+        );
         std::env::set_var("NUPHUS_MCP_VISION_MAX_TOKENS", "999999");
         let err = VisionConfig::from_env().expect_err("overflow must fail");
-        assert!(err.contains("1..=32768"), "error must state the range: {err}");
+        assert!(
+            err.contains("1..=32768"),
+            "error must state the range: {err}"
+        );
     }
 
     // ---- Protocol request/response shapes ----
@@ -599,7 +614,10 @@ mod tests {
         assert_eq!(content[1]["text"], "what is this");
         // Native protocol must NOT use the OpenAI image_url shape.
         let raw = body.to_string();
-        assert!(!raw.contains("image_url"), "must not use image_url block: {raw}");
+        assert!(
+            !raw.contains("image_url"),
+            "must not use image_url block: {raw}"
+        );
     }
 
     #[test]
@@ -611,7 +629,10 @@ mod tests {
             .collect();
         assert_eq!(map.get("x-api-key"), Some(&"sk-ant-abc"));
         assert_eq!(map.get("anthropic-version"), Some(&"2023-06-01"));
-        assert!(map.get("authorization").is_none(), "anthropic must not use bearer");
+        assert!(
+            map.get("authorization").is_none(),
+            "anthropic must not use bearer"
+        );
     }
 
     #[test]
@@ -633,7 +654,10 @@ mod tests {
                 { "type": "text", "text": "Save." }
             ]
         });
-        assert_eq!(parse_anthropic_response(&resp).unwrap(), "The button says Save.");
+        assert_eq!(
+            parse_anthropic_response(&resp).unwrap(),
+            "The button says Save."
+        );
     }
 
     #[test]
@@ -689,10 +713,8 @@ mod tests {
         let _g = EnvGuard::clear();
 
         let png = make_test_png();
-        let img_path = std::env::temp_dir().join(format!(
-            "nuphus_vision_e2e_{}.png",
-            std::process::id()
-        ));
+        let img_path =
+            std::env::temp_dir().join(format!("nuphus_vision_e2e_{}.png", std::process::id()));
         std::fs::write(&img_path, &png).expect("write test png");
         let img_str = img_path.to_str().unwrap().to_string();
         let _cleanup = TestFile(&img_path); // removes on drop
