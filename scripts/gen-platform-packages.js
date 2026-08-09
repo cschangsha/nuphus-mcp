@@ -51,7 +51,12 @@ for (const p of PLATFORMS) {
     os: [NPM_OS[p.platform]],
     cpu: [p.arch],
     bin: {
-      'nuphus-mcp': path.join('bin', p.exe),
+      // Forward slash deliberately: on Windows, path.join('bin', p.exe) yields a
+      // `bin\` backslash that lands in the committed manifest. npm normalizes bin
+      // on publish, but a committed backslash makes regeneration non-deterministic
+      // across OSes. Explicit '/bin/' keeps the committed files byte-identical
+      // whether the script runs on Windows, Linux, or macOS.
+      'nuphus-mcp': 'bin/' + p.exe,
     },
     files: ['bin'],
     scripts: {

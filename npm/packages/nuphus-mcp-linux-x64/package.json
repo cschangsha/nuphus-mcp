@@ -14,7 +14,7 @@
     "x64"
   ],
   "bin": {
-    "nuphus-mcp": "bin\\nuphus-mcp"
+    "nuphus-mcp": "bin/nuphus-mcp"
   },
   "files": [
     "bin"
