@@ -126,6 +126,22 @@ fn effect_timeout_ms() -> u64 {
         .unwrap_or(15_000)
 }
 
+/// Resolve the shared `selector` / `ref` tool contract and reject missing or
+/// blank values before any page-side effect is attempted.
+fn selector_or_ref<'a>(tool: &str, args: &'a Value) -> Result<&'a str, BrowserError> {
+    args.get("selector")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            args.get("ref")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            BrowserError::Execution(format!("{tool}: selector or ref parameter is required"))
+        })
+}
+
 /// Execute a browser_* tool, returning a text result.
 pub async fn execute(name: &str, args: &Value) -> Result<String, String> {
     // Per-operation budget (same policy as the main crate's browser_tools.rs).
@@ -324,11 +340,7 @@ async fn run_op(
             client.batch_exec(script).await?
         }
         "browser_click" => {
-            let selector = args
-                .get("selector")
-                .and_then(Value::as_str)
-                .or_else(|| args.get("ref").and_then(Value::as_str))
-                .unwrap_or("");
+            let selector = selector_or_ref("browser_click", args)?;
             let trusted = args
                 .get("trusted")
                 .and_then(Value::as_bool)
@@ -379,11 +391,7 @@ async fn run_op(
             }
         }
         "browser_type" => {
-            let selector = args
-                .get("selector")
-                .and_then(Value::as_str)
-                .or_else(|| args.get("ref").and_then(Value::as_str))
-                .unwrap_or("");
+            let selector = selector_or_ref("browser_type", args)?;
             let text = args.get("text").and_then(Value::as_str).unwrap_or("");
             // Effect verification (same contract as click): arm before typing,
             // then confirm the field actually received the text within the window.
@@ -426,7 +434,9 @@ async fn run_op(
                     "browser_screenshot: path parameter is required".to_string(),
                 ));
             }
-            client.screenshot(Some(path)).await?
+            let validated =
+                crate::security::validate_screenshot_path(path).map_err(BrowserError::Execution)?;
+            client.screenshot(Some(&validated)).await?
         }
         "browser_extract" => {
             let max_chars = args
@@ -485,16 +495,7 @@ async fn run_op(
             client.upload_file(selector, file_path).await?
         }
         "browser_drag_files" => {
-            let selector = args
-                .get("selector")
-                .and_then(Value::as_str)
-                .or_else(|| args.get("ref").and_then(Value::as_str))
-                .unwrap_or("");
-            if selector.is_empty() {
-                return Err(BrowserError::Execution(
-                    "browser_drag_files: selector or ref parameter is required".to_string(),
-                ));
-            }
+            let selector = selector_or_ref("browser_drag_files", args)?;
             let file_paths = args
                 .get("file_paths")
                 .and_then(Value::as_array)
@@ -601,6 +602,34 @@ mod tests {
         }
         // Deliberately excluded despite being idempotent-looking (form resubmit).
         assert!(!is_read_only_tool("browser_navigate"));
+    }
+
+    #[test]
+    fn selector_or_ref_rejects_missing_and_blank_values() {
+        let missing = selector_or_ref("browser_click", &serde_json::json!({}))
+            .expect_err("missing selector/ref must fail");
+        assert_eq!(
+            missing.to_string(),
+            "Execution error: browser_click: selector or ref parameter is required"
+        );
+
+        assert!(selector_or_ref(
+            "browser_click",
+            &serde_json::json!({"selector": "  ", "ref": ""})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn selector_or_ref_accepts_either_alias_and_prefers_selector() {
+        let selector_args = serde_json::json!({"selector": "#submit", "ref": "@2"});
+        assert_eq!(
+            selector_or_ref("browser_click", &selector_args).unwrap(),
+            "#submit"
+        );
+
+        let ref_args = serde_json::json!({"ref": "@2"});
+        assert_eq!(selector_or_ref("browser_click", &ref_args).unwrap(), "@2");
     }
 
     #[test]

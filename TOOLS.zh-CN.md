@@ -1,6 +1,6 @@
 # nuphus-mcp 工具参考文档
 
-本文档描述 `nuphus-mcp`（v0.1.0）暴露的全部工具。所有工具与 `tools/list`
+本文档描述当前 `nuphus-mcp` 构建暴露的全部工具。所有工具与 `tools/list`
 返回的 schema 一致，本文档是权威的人类可读参考。
 
 - **工具总数：37** —— 桌面 15 · 浏览器 22
@@ -545,7 +545,8 @@ CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 �
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `selector` | string | **是** | - | CSS 选择器或引用 ID（如 `@1`、`@e0`、`'button'`） |
+| `selector` | string | `selector` 或 `ref` | - | CSS 选择器或引用 ID（如 `@1`、`@e0`、`'button'`） |
+| `ref` | string | `selector` 或 `ref` | - | 快照引用 ID；`selector` 的别名 |
 | `trusted` | boolean | 否 | `false` | 派发真实可信 CDP 鼠标事件（产生用户激活）替代 JS 点击。用于自动播放受限的媒体播放等手势受限场景。 |
 | `button` | string | 否 | `left` | 鼠标键：`left`、`right` 或 `middle`；右键和中键始终可信。 |
 | `snapshot` | boolean | 否 | 随按键而定 | 是否附带点击后快照；左键默认 `true`，右键/中键默认 `false`。 |
@@ -560,7 +561,7 @@ CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 �
 ```json
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_click","arguments":{"selector":".file-row","button":"right"}}}
 ```
-**返回** 点击确认，随后带 `── Page state ──` 页面快照。
+**返回** 点击确认；启用 `snapshot` 时，随后附带 `── Page state ──` 页面快照。
 
 ---
 
@@ -571,7 +572,8 @@ CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 �
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `selector` | string | **是** | - | 输入框的 CSS 选择器或引用 ID（如 `@1`、`@e0`） |
+| `selector` | string | `selector` 或 `ref` | - | 输入框的 CSS 选择器或引用 ID（如 `@1`、`@e0`） |
+| `ref` | string | `selector` 或 `ref` | - | 快照引用 ID；`selector` 的别名 |
 | `text` | string | **是** | - | 要输入的文本 |
 
 **示例**
@@ -618,13 +620,13 @@ CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 �
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `path` | string | 否 | - | 保存路径 |
+| `path` | string | **是** | - | 父目录已存在的 PNG 保存路径 |
 
 **示例**
 ```json
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{"path":"page.png"}}}
 ```
-**返回** 未传 `path` 时返回 base64 编码的 PNG。
+**返回** 保存路径和 PNG 字节数。
 
 ---
 
@@ -781,7 +783,8 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
-| `selector` | string | **是** | - | 放置目标的 CSS 选择器或快照引用 |
+| `selector` | string | `selector` 或 `ref` | - | 放置目标的 CSS 选择器或快照引用 |
+| `ref` | string | `selector` 或 `ref` | - | 快照引用 ID；`selector` 的别名 |
 | `file_paths` | string[] | **是** | - | 真实存在的本地文件或目录绝对路径 |
 
 **示例**
@@ -823,7 +826,8 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 
 ### browser_list_tabs
 
-列出所有打开的标签页（ID、URL、标题）。
+列出所有打开的标签页（索引、URL、标题）。索引反映当前标签页顺序，新增或关闭
+标签页后可能变化。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
@@ -874,5 +878,5 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 
 ---
 
-*依据 `nuphus-mcp` v0.1.0 的 `tools/list` schema 生成。本版本仅暴露以上
+*依据当前 `nuphus-mcp` 构建的 `tools/list` schema 生成。本版本仅暴露以上
 37 个工具。*

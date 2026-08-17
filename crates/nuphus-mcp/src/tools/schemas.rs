@@ -68,6 +68,23 @@ fn tool_def(
     }
 }
 
+/// Build a tool schema that accepts either `selector` or its `ref` alias.
+/// `anyOf` is intentional: callers may provide both, while at least one must
+/// be present. Other required fields remain in the top-level `required` list.
+fn tool_def_with_selector_or_ref(
+    name: &'static str,
+    description: &'static str,
+    properties: Value,
+    required: &[&str],
+) -> ToolDef {
+    let mut tool = tool_def(name, description, properties, required);
+    tool.input_schema["anyOf"] = json!([
+        { "required": ["selector"] },
+        { "required": ["ref"] }
+    ]);
+    tool
+}
+
 /// All tools (desktop + browser)
 pub fn all_tools() -> Vec<ToolDef> {
     let mut tools = desktop_tools();
@@ -244,27 +261,27 @@ fn browser_tools() -> Vec<ToolDef> {
             },
             &["script"],
         ),
-        tool_def(
+        tool_def_with_selector_or_ref(
             "browser_click",
             "Click element by CSS selector or ref ID from snapshot (e.g. @1, @e0, 'button'). CSS selector path auto-waits for the element to appear and become visible (up to 5s) before clicking. Default left clicks are JS-synthesized (reliable, ignore overlays) but do NOT produce user activation; pass trusted=true to dispatch real CDP mouse events (isTrusted=true) instead. Right and middle clicks always use trusted CDP events.",
             json_props! {
-                "selector" => obj!("type"="string","description"="CSS selector or ref ID (e.g. @1, @e0, 'button')"),
-                "ref" => obj!("type"="string","description"="Ref ID from snapshot (e.g. @1, @e0); alias of selector — provide either one"),
+                "selector" => obj!("type"="string","minLength"=1,"description"="CSS selector or ref ID (e.g. @1, @e0, 'button')"),
+                "ref" => obj!("type"="string","minLength"=1,"description"="Ref ID from snapshot (e.g. @1, @e0); alias of selector — provide either one"),
                 "trusted" => obj!("type"="boolean","description"="Dispatch real trusted CDP mouse events at the element's center (produces user activation). Default false for left clicks; right and middle clicks are always trusted."),
                 "button" => obj!("type"="string","enum"=["left","right","middle"],"default"="left","description"="Mouse button. Right and middle clicks use trusted CDP events automatically."),
                 "snapshot" => obj!("type"="boolean","description"="Include a post-click page snapshot. Defaults to true for left clicks and false for right/middle clicks so transient context menus remain open for the next operation.")
             },
-            &["selector"],
+            &[],
         ),
-        tool_def(
+        tool_def_with_selector_or_ref(
             "browser_type",
             "Type text into input field by CSS selector or ref ID from snapshot. CSS selector path auto-waits for the element to appear and become visible (up to 5s) before typing.",
             json_props! {
-                "selector" => obj!("type"="string","description"="CSS selector or ref ID of input field (e.g. @1, @e0)"),
-                "ref" => obj!("type"="string","description"="Ref ID from snapshot (e.g. @1, @e0); alias of selector — provide either one"),
+                "selector" => obj!("type"="string","minLength"=1,"description"="CSS selector or ref ID of input field (e.g. @1, @e0)"),
+                "ref" => obj!("type"="string","minLength"=1,"description"="Ref ID from snapshot (e.g. @1, @e0); alias of selector — provide either one"),
                 "text" => obj!("type"="string","description"="Text to type")
             },
-            &["selector", "text"],
+            &["text"],
         ),
         tool_def(
             "browser_scroll",
@@ -285,9 +302,9 @@ fn browser_tools() -> Vec<ToolDef> {
         ),
         tool_def(
             "browser_screenshot",
-            "Screenshot the current browser page.",
+            "Screenshot the current browser page and save it as a PNG file.",
             json_props! {
-                "path" => obj!("type"="string","description"="Save path")
+                "path" => obj!("type"="string","minLength"=1,"description"="Save path for the PNG file; the parent directory must exist")
             },
             &["path"],
         ),
@@ -361,15 +378,15 @@ fn browser_tools() -> Vec<ToolDef> {
             },
             &["selector", "file_path"],
         ),
-        tool_def(
+        tool_def_with_selector_or_ref(
             "browser_drag_files",
             "Drag one or more existing local files or directories onto a browser element using native Chrome DevTools drag events. Unlike browser_upload, this does not require an input[type=file] element and does not base64-encode file contents.",
             json_props! {
-                "selector" => obj!("type"="string","description"="CSS selector or ref ID of the drop target (e.g. @1, @e0, '.explorer-viewlet')"),
-                "ref" => obj!("type"="string","description"="Ref ID from snapshot; alias of selector — provide either one"),
+                "selector" => obj!("type"="string","minLength"=1,"description"="CSS selector or ref ID of the drop target (e.g. @1, @e0, '.explorer-viewlet')"),
+                "ref" => obj!("type"="string","minLength"=1,"description"="Ref ID from snapshot; alias of selector — provide either one"),
                 "file_paths" => obj!("type"="array","items"=obj!("type"="string"),"minItems"=1,"description"="Absolute paths of existing local files or directories to drag")
             },
-            &["selector", "file_paths"],
+            &["file_paths"],
         ),
         tool_def(
             "browser_list_downloads",
@@ -387,7 +404,7 @@ fn browser_tools() -> Vec<ToolDef> {
         ),
         tool_def(
             "browser_list_tabs",
-            "List all open tabs with IDs, URLs, and titles.",
+            "List all open tabs with indices, URLs, and titles.",
             json!({}),
             &[],
         ),
@@ -482,6 +499,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn selector_ref_aliases_match_the_runtime_contract() {
+        for (name, other_required) in [
+            ("browser_click", &[][..]),
+            ("browser_type", &["text"][..]),
+            ("browser_drag_files", &["file_paths"][..]),
+        ] {
+            let tool = all_tools()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("missing schema for {name}"));
+            let required = tool.input_schema["required"]
+                .as_array()
+                .expect("required must be an array");
+
+            assert_eq!(
+                required,
+                &other_required
+                    .iter()
+                    .map(|field| json!(field))
+                    .collect::<Vec<_>>(),
+                "{name}: selector/ref must be alternatives, not top-level requirements"
+            );
+            assert_eq!(
+                tool.input_schema["anyOf"],
+                json!([
+                    { "required": ["selector"] },
+                    { "required": ["ref"] }
+                ]),
+                "{name}: schema must require selector or ref"
+            );
+            assert_eq!(tool.input_schema["properties"]["selector"]["minLength"], 1);
+            assert_eq!(tool.input_schema["properties"]["ref"]["minLength"], 1);
+        }
+    }
+
+    #[test]
+    fn browser_screenshot_schema_matches_save_only_runtime() {
+        let tool = all_tools()
+            .into_iter()
+            .find(|tool| tool.name == "browser_screenshot")
+            .expect("missing browser_screenshot schema");
+
+        assert_eq!(tool.input_schema["required"], json!(["path"]));
+        assert_eq!(tool.input_schema["properties"]["path"]["minLength"], 1);
+        assert!(tool.description.contains("save"));
     }
 
     /// Anti-drift guard: the schema declaration and the runtime write classification

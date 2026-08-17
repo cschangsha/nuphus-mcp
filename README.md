@@ -47,7 +47,7 @@ key; local OCR is built in; vision works with your own vision LLM
 - **Zero-cost stdio**: no HTTP server, no daemon. The process reads
   single-line JSON from stdin and writes responses to stdout.
 - **Safety-first**: destructive tools are annotated per the MCP spec; optional
-  strict-confirm mode; path validation for screenshot/upload.
+  strict-confirm mode; path validation for screenshots, uploads, and file drags.
 
 ## Repository Layout
 

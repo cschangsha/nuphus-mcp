@@ -18,7 +18,7 @@
 - **Computer vision** (2 tools): `desktop_vision` (BYOK — send a screenshot to your own vision model via an OpenAI-compatible or Anthropic native API) and `desktop_perceive` (local OCR + YOLO element location with PaddleOCR, models auto-downloaded on first run).
 - **Browser automation** (21 tools): navigate, snapshot (accessibility tree with `@N` refs), click, type, exec, scroll, extract, screenshot, evaluate, back/forward, wait_for, cookies get/set/import, upload, tabs, downloads — implemented on `nuphus-browser` (chromiumoxide CDP, shared with the Nuphus main app).
 - **Zero-cost stdio**: no HTTP server, no daemon. The process reads single-line JSON from stdin and writes responses to stdout.
-- **Safety-first**: destructive tools are annotated per the MCP spec; optional strict-confirm mode; path validation for screenshot/upload.
+- **Safety-first**: destructive tools are annotated per the MCP spec; optional strict-confirm mode; path validation for screenshots, uploads, and file drags.
 - **Dogfooded**: the Nuphus main app itself calls this server through its MCP client (dual-channel) so the MCP layer is validated by real use.
 
 ## Prerequisites
@@ -180,7 +180,7 @@ cargo run -p nuphus-mcp --example demo
 ```
 
 ```
-[1] initialize OK → server=nuphus-mcp v0.1.0, protocol=2024-11-05
+[1] initialize OK → server=nuphus-mcp, protocol=2024-11-05
 [2] tools/list OK → 37 tools (desktop 15 + browser 22), 26 marked destructive
 [3] desktop_screen_size → {"height":1080,"width":1920}
 [4] browser_navigate → Navigated to: data:text/html,...  | Title: Untitled
@@ -241,7 +241,9 @@ cargo run -p nuphus-mcp --example demo
    # tools/call {"name":"desktop_input","arguments":{"mode":"type","hwnd":123}} → isError "requires confirmation"
    # tools/call {"name":"desktop_input","arguments":{"mode":"type","hwnd":123,"confirm":true}} → executes
    ```
-3. **Path validation** — screenshot save paths reject `..` traversal, Windows device paths (`\\?\`, `\\.\`), and system-protected directories; upload files must exist.
+3. **Path validation** — desktop/browser screenshot save paths reject `..` traversal,
+   Windows device paths (`\\?\`, `\\.\`), and system-protected directories; upload
+   files must exist, and drag paths must be canonical absolute paths.
 4. **stdio / localhost-only** — the transport is a local pipe; no network surface. Only processes that can spawn the binary locally can reach it.
 5. **Read-only tools unaffected** — `desktop_screen_size`, `desktop_windows_list`, `browser_snapshot`, etc. never require confirmation.
 

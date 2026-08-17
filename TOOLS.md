@@ -1,6 +1,6 @@
 # nuphus-mcp Tools Reference
 
-This document describes every tool exposed by `nuphus-mcp` (version 0.1.0).
+This document describes every tool exposed by the current `nuphus-mcp` build.
 All tools are defined by the MCP Server's `tools/list` response; this document
 is the authoritative human-readable reference.
 
@@ -580,7 +580,8 @@ right/middle clicks so transient context menus remain open for the next call.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `selector` | string | **yes** | - | CSS selector or ref ID (e.g. `@1`, `@e0`, `'button'`) |
+| `selector` | string | selector or `ref` | - | CSS selector or ref ID (e.g. `@1`, `@e0`, `'button'`) |
+| `ref` | string | selector or `ref` | - | Snapshot ref ID; alias of `selector` |
 | `trusted` | boolean | no | `false` | Dispatch real trusted CDP mouse events (produces user activation) instead of a JS click. Use for autoplay-gated media playback and gesture-gated features. |
 | `button` | string | no | `left` | Mouse button: `left`, `right`, or `middle`. Right and middle are always trusted. |
 | `snapshot` | boolean | no | button-dependent | Include a post-click snapshot; defaults to `true` for left and `false` for right/middle. |
@@ -595,7 +596,8 @@ right/middle clicks so transient context menus remain open for the next call.
 ```json
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_click","arguments":{"selector":".file-row","button":"right"}}}
 ```
-**Returns** click confirmation followed by a `── Page state ──` snapshot.
+**Returns** click confirmation; when `snapshot` is enabled, it is followed by a
+`── Page state ──` snapshot.
 
 ---
 
@@ -607,7 +609,8 @@ selector paths auto-wait for the element to appear and become visible (up to
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `selector` | string | **yes** | - | CSS selector or ref ID of input field (e.g. `@1`, `@e0`) |
+| `selector` | string | selector or `ref` | - | CSS selector or ref ID of input field (e.g. `@1`, `@e0`) |
+| `ref` | string | selector or `ref` | - | Snapshot ref ID; alias of `selector` |
 | `text` | string | **yes** | - | Text to type |
 
 **Example**
@@ -654,13 +657,13 @@ Screenshot the current browser page.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `path` | string | no | - | Save path |
+| `path` | string | **yes** | - | Existing-parent save path for the PNG file |
 
 **Example**
 ```json
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_screenshot","arguments":{"path":"page.png"}}}
 ```
-**Returns** base64-encoded PNG when `path` is omitted.
+**Returns** the saved path and PNG byte count.
 
 ---
 
@@ -822,7 +825,8 @@ not subject to the MCP request-line size limit.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `selector` | string | **yes** | - | CSS selector or snapshot ref for the drop target |
+| `selector` | string | selector or `ref` | - | CSS selector or snapshot ref for the drop target |
+| `ref` | string | selector or `ref` | - | Snapshot ref ID; alias of `selector` |
 | `file_paths` | string[] | **yes** | - | Absolute paths of existing local files or directories |
 
 **Example**
@@ -864,7 +868,8 @@ Open a new browser tab.
 
 ### browser_list_tabs
 
-List all open tabs with IDs, URLs, and titles.
+List all open tabs with indices, URLs, and titles. Indices reflect the current
+tab ordering and may change when tabs are opened or closed.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
@@ -916,5 +921,5 @@ open a page → fill and submit a form.
 
 ---
 
-*Generated from the `tools/list` schema of `nuphus-mcp` v0.1.0. Only the 37
+*Generated from the current `tools/list` schema of `nuphus-mcp`. Only the 37
 tools listed above are exposed by this version.*
