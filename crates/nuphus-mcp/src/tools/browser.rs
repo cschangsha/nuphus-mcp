@@ -22,6 +22,7 @@ pub const EXECUTABLE_BROWSER_TOOLS: &[&str] = &[
     "browser_exec",
     "browser_click",
     "browser_type",
+    "browser_press",
     "browser_scroll",
     "browser_screenshot",
     "browser_extract",
@@ -407,6 +408,30 @@ async fn run_op(
                      page). Verify the field value with browser_snapshot before the next step.",
                     selector, effect_timeout
                 )));
+            }
+            match client.snapshot(false, None).await {
+                Ok(snap) => format!("{}\n\n── Page state ──\n{}", result, snap),
+                Err(e) => format!(
+                    "{}\n\n── Note: post-action snapshot failed; page state unavailable for the next step: {} ──",
+                    result, e
+                ),
+            }
+        }
+        "browser_press" => {
+            let key = args
+                .get("key")
+                .and_then(Value::as_str)
+                .filter(|key| !key.trim().is_empty())
+                .ok_or_else(|| {
+                    BrowserError::Execution("browser_press: key parameter is required".to_string())
+                })?;
+            let result = client.press_key(key).await?;
+            let include_snapshot = args
+                .get("snapshot")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !include_snapshot {
+                return Ok(result);
             }
             match client.snapshot(false, None).await {
                 Ok(snap) => format!("{}\n\n── Page state ──\n{}", result, snap),

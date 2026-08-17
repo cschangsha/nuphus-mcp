@@ -401,6 +401,7 @@ mod tests {
             "browser_snapshot",
             "browser_click",
             "browser_type",
+            "browser_press",
             "browser_exec",
         ] {
             assert!(

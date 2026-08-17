@@ -25,7 +25,7 @@ key; local OCR is built in; vision works with your own vision LLM
 
 ## Features
 
-- **37 MCP tools** (15 desktop + 22 browser) — screenshots, window control,
+- **38 MCP tools** (15 desktop + 23 browser) — screenshots, window control,
   mouse/keyboard, Chrome CDP automation, and more — see [TOOLS.md](TOOLS.md) /
   [TOOLS.zh-CN.md](TOOLS.zh-CN.md) for the full reference.
 - **Desktop automation**: screen size, screenshot (PNG/base64), window list,
@@ -54,7 +54,7 @@ key; local OCR is built in; vision works with your own vision LLM
 ```
 nuphus-mcp/
 ├── Cargo.toml                  # workspace root
-├── TOOLS.md / TOOLS.zh-CN.md   # 37-tool reference
+├── TOOLS.md / TOOLS.zh-CN.md   # 38-tool reference
 ├── crates/
 │   ├── nuphus-mcp/             # MCP Server (this repo's product)
 │   ├── nuphus-browser/         # Browser automation core (CDP)

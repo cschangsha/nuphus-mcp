@@ -284,6 +284,15 @@ fn browser_tools() -> Vec<ToolDef> {
             &["text"],
         ),
         tool_def(
+            "browser_press",
+            "Press a trusted physical keyboard key or chord on the currently focused page element. Use browser_click or browser_type first when a specific element needs focus. Supports named keys (Enter, Tab, Escape, ArrowUp, PageDown, F1, Space), single US-keyboard characters, and modifier chords such as Control+c, Shift+Tab, or Meta+ArrowLeft. Does not verify a DOM change because terminal/canvas handlers may update outside the DOM.",
+            json_props! {
+                "key" => obj!("type"="string","minLength"=1,"description"="Key or chord to press, e.g. Enter, ArrowUp, Control+c, Shift+Tab, Meta+ArrowLeft"),
+                "snapshot" => obj!("type"="boolean","default"=false,"description"="Include a post-key page snapshot. Defaults to false so terminal/canvas state and transient UI are not disturbed.")
+            },
+            &["key"],
+        ),
+        tool_def(
             "browser_scroll",
             "Scroll page up/down by N pixels.",
             json_props! {
@@ -463,12 +472,21 @@ mod tests {
     #[test]
     fn write_tools_declare_confirm() {
         let tools = all_tools();
+        assert_eq!(tools.len(), 38, "published docs expect 38 total tools");
+        assert_eq!(
+            tools
+                .iter()
+                .filter(|tool| tool.name.starts_with("browser_"))
+                .count(),
+            23,
+            "published docs expect 23 browser tools"
+        );
         let write_count = tools
             .iter()
             .filter(|t| is_write_tool_schema(t.name))
             .count();
-        // Regression anchor from issue #1 plus browser_drag_files: exactly 26 write tools.
-        assert_eq!(write_count, 26, "expected 26 write tools");
+        // Regression anchor from issue #1 plus browser_drag_files/browser_press: exactly 27 write tools.
+        assert_eq!(write_count, 27, "expected 27 write tools");
 
         for tool in &tools {
             let props = tool.input_schema["properties"]
@@ -549,6 +567,25 @@ mod tests {
         assert!(tool.description.contains("save"));
     }
 
+    #[test]
+    fn browser_press_schema_exposes_key_contract_and_safe_snapshot_default() {
+        let tool = all_tools()
+            .into_iter()
+            .find(|tool| tool.name == "browser_press")
+            .expect("missing browser_press schema");
+
+        assert_eq!(tool.input_schema["required"], json!(["key"]));
+        assert_eq!(tool.input_schema["properties"]["key"]["minLength"], 1);
+        assert_eq!(
+            tool.input_schema["properties"]["snapshot"]["default"],
+            false
+        );
+        assert_eq!(
+            tool.input_schema["properties"]["confirm"]["type"],
+            "boolean"
+        );
+    }
+
     /// Anti-drift guard: the schema declaration and the runtime write classification
     /// must agree. A tool declares `confirm` iff the runtime *can* require it for some
     /// argument set — so a future write tool that misses one of the two lists is caught.
@@ -619,8 +656,8 @@ mod tests {
         }
 
         assert_eq!(
-            write_tools_checked, 26,
-            "expected all 26 write tools to be exercised"
+            write_tools_checked, 27,
+            "expected all 27 write tools to be exercised"
         );
     }
 }

@@ -22,7 +22,7 @@
 
 ## 特性
 
-- **37 个 MCP 工具**（桌面 15 + 浏览器 22）—— 完整参考见
+- **38 个 MCP 工具**（桌面 15 + 浏览器 23）—— 完整参考见
   [TOOLS.md](TOOLS.md) / [TOOLS.zh-CN.md](TOOLS.zh-CN.md)。
 - **桌面自动化**：屏幕分辨率、截图（PNG/base64）、窗口列表、窗口激活/截图/移动/缩放/信息查询、
   鼠标点击/拖拽/滚轮/定位、键盘输入/快捷键、剪贴板写入/清空 —— 基于
@@ -44,7 +44,7 @@
 ```
 nuphus-mcp/
 ├── Cargo.toml                  # workspace 根
-├── TOOLS.md / TOOLS.zh-CN.md   # 37 工具参考文档
+├── TOOLS.md / TOOLS.zh-CN.md   # 38 工具参考文档
 ├── crates/
 │   ├── nuphus-mcp/             # MCP Server（本仓库产品）
 │   ├── nuphus-browser/         # 浏览器自动化核心（CDP）

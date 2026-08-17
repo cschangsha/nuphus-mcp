@@ -37,8 +37,8 @@ nuphus-mcp/
 │   ├── nuphus-mcp/             # MCP Server (protocol / server / tools / security)
 │   ├── nuphus-browser/         # Browser automation core (CDP, chromiumoxide)
 │   └── desktop-api/            # Desktop control core (vendored; xcap + Win32)
-├── TOOLS.md                    # 37-tool reference (EN)
-├── TOOLS.zh-CN.md              # 37-tool reference (ZH)
+├── TOOLS.md                    # 38-tool reference (EN)
+├── TOOLS.zh-CN.md              # 38-tool reference (ZH)
 ├── examples/                   # demo.rs lives in crates/nuphus-mcp/examples
 └── ...
 ```

@@ -16,7 +16,7 @@
 
 - **Desktop automation** (15 tools): screen size, screenshot (PNG/base64), window list/activate/screenshot/**move/resize/info**, mouse click/drag/scroll/position, keyboard input/hotkey, clipboard write/clean — implemented on the `desktop-api` crate (xcap + Win32, no Tauri dependency).
 - **Computer vision** (2 tools): `desktop_vision` (BYOK — send a screenshot to your own vision model via an OpenAI-compatible or Anthropic native API) and `desktop_perceive` (local OCR + YOLO element location with PaddleOCR, models auto-downloaded on first run).
-- **Browser automation** (21 tools): navigate, snapshot (accessibility tree with `@N` refs), click, type, exec, scroll, extract, screenshot, evaluate, back/forward, wait_for, cookies get/set/import, upload, tabs, downloads — implemented on `nuphus-browser` (chromiumoxide CDP, shared with the Nuphus main app).
+- **Browser automation** (23 tools): navigate, snapshot (accessibility tree with `@N` refs), click, type, trusted key/chord press, exec, scroll, extract, screenshot, evaluate, back/forward, wait_for, cookies get/set/import, upload/drag, tabs, downloads — implemented on `nuphus-browser` (chromiumoxide CDP, shared with the Nuphus main app).
 - **Zero-cost stdio**: no HTTP server, no daemon. The process reads single-line JSON from stdin and writes responses to stdout.
 - **Safety-first**: destructive tools are annotated per the MCP spec; optional strict-confirm mode; path validation for screenshots, uploads, and file drags.
 - **Dogfooded**: the Nuphus main app itself calls this server through its MCP client (dual-channel) so the MCP layer is validated by real use.
@@ -181,7 +181,7 @@ cargo run -p nuphus-mcp --example demo
 
 ```
 [1] initialize OK → server=nuphus-mcp, protocol=2024-11-05
-[2] tools/list OK → 37 tools (desktop 15 + browser 22), 26 marked destructive
+[2] tools/list OK → 38 tools (desktop 15 + browser 23), 27 marked destructive
 [3] desktop_screen_size → {"height":1080,"width":1920}
 [4] browser_navigate → Navigated to: data:text/html,...  | Title: Untitled
 [5] browser_evaluate → "nuphus-mcp demo"
@@ -210,13 +210,14 @@ cargo run -p nuphus-mcp --example demo
 | `desktop_clipboard_write` | Write long text (>500 chars) to clipboard |
 | `desktop_clipboard_clean` | Clear the system clipboard |
 
-### Browser (22)
+### Browser (23)
 
 | Tool | Description |
 |------|-------------|
 | `browser_navigate` | Open URL (auto-snapshots after) |
 | `browser_snapshot` | Accessibility-tree snapshot with `@N` refs |
 | `browser_click` / `browser_type` | Left/right/middle click / type into element (CSS selector or `@N`) |
+| `browser_press` | Press a trusted key or chord on the focused element (`Enter`, `Control+c`, `Shift+Tab`) |
 | `browser_exec` | Multi-step batch script in one CDP round trip |
 | `browser_scroll` / `browser_extract` | Scroll page / extract readable text |
 | `browser_screenshot` | Screenshot current page |
