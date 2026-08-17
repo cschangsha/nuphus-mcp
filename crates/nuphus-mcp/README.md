@@ -181,7 +181,7 @@ cargo run -p nuphus-mcp --example demo
 
 ```
 [1] initialize OK → server=nuphus-mcp v0.1.0, protocol=2024-11-05
-[2] tools/list OK → 36 tools (desktop 15 + browser 21), 25 marked destructive
+[2] tools/list OK → 37 tools (desktop 15 + browser 22), 26 marked destructive
 [3] desktop_screen_size → {"height":1080,"width":1920}
 [4] browser_navigate → Navigated to: data:text/html,...  | Title: Untitled
 [5] browser_evaluate → "nuphus-mcp demo"
@@ -210,13 +210,13 @@ cargo run -p nuphus-mcp --example demo
 | `desktop_clipboard_write` | Write long text (>500 chars) to clipboard |
 | `desktop_clipboard_clean` | Clear the system clipboard |
 
-### Browser (21)
+### Browser (22)
 
 | Tool | Description |
 |------|-------------|
 | `browser_navigate` | Open URL (auto-snapshots after) |
 | `browser_snapshot` | Accessibility-tree snapshot with `@N` refs |
-| `browser_click` / `browser_type` | Click / type into element (CSS selector or `@N`) |
+| `browser_click` / `browser_type` | Left/right/middle click / type into element (CSS selector or `@N`) |
 | `browser_exec` | Multi-step batch script in one CDP round trip |
 | `browser_scroll` / `browser_extract` | Scroll page / extract readable text |
 | `browser_screenshot` | Screenshot current page |
@@ -225,6 +225,7 @@ cargo run -p nuphus-mcp --example demo
 | `browser_wait_for` | Wait for selector state (attached/visible/hidden) |
 | `browser_cookies_get` / `browser_cookies_set` / `browser_import_cookies` | Cookie management |
 | `browser_upload` | Upload file to `<input type=file>` |
+| `browser_drag_files` | Native file/directory drag onto any browser element |
 | `browser_list_tabs` / `browser_switch_tab` / `browser_new_tab` | Tab management |
 | `browser_list_downloads` | List download directory |
 | `browser_close` | Close browser |

@@ -27,7 +27,7 @@ fn is_write_tool_name_only(name: &str) -> bool {
             | "browser_navigate" | "browser_click" | "browser_type" | "browser_exec"
             | "browser_scroll" | "browser_screenshot" | "browser_close" | "browser_evaluate"
             | "browser_back" | "browser_forward" | "browser_cookies_set"
-            | "browser_import_cookies" | "browser_upload" | "browser_new_tab"
+            | "browser_import_cookies" | "browser_upload" | "browser_drag_files" | "browser_new_tab"
             | "browser_switch_tab"
     )
 }
@@ -204,6 +204,25 @@ pub fn validate_upload_file(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Native drag path validation: each entry must be an existing file or directory.
+/// Returns a canonical absolute path for Chrome's `Input.dispatchDragEvent`.
+pub fn validate_drag_path(path: &str) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("drag path must not be empty".to_string());
+    }
+    let p = std::path::Path::new(trimmed);
+    if !p.is_absolute() {
+        return Err(format!("drag path must be absolute: {}", p.display()));
+    }
+    if !p.exists() {
+        return Err(format!("drag path does not exist: {}", p.display()));
+    }
+    p.canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("cannot resolve drag path '{}': {e}", p.display()))
+}
+
 fn in_system_protected_dir(p: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
@@ -255,6 +274,10 @@ mod tests {
             &json!({"action":"position"})
         ));
         assert!(is_write_tool("browser_click", &json!({"selector":"#a"})));
+        assert!(is_write_tool(
+            "browser_drag_files",
+            &json!({"selector":"#drop","file_paths":["/tmp/a"]})
+        ));
         assert!(!is_write_tool("browser_snapshot", &json!({})));
         assert!(!is_write_tool("desktop_screen_size", &json!({})));
     }
@@ -329,6 +352,17 @@ mod tests {
     fn upload_file_validation_requires_existing_file() {
         assert!(validate_upload_file("").is_err());
         assert!(validate_upload_file("Z:\\definitely\\missing\\file.bin").is_err());
+    }
+
+    #[test]
+    fn drag_path_validation_accepts_files_and_directories() {
+        let dir = std::env::temp_dir();
+        assert!(validate_drag_path(&dir.to_string_lossy()).is_ok());
+        let executable = std::env::current_exe().expect("test executable path");
+        assert!(validate_drag_path(&executable.to_string_lossy()).is_ok());
+        assert!(validate_drag_path("").is_err());
+        assert!(validate_drag_path(".").is_err());
+        assert!(validate_drag_path("Z:\\definitely\\missing\\path").is_err());
     }
 
     /// Anti-drift guard: every tool declared in tools/list must be classified as either
