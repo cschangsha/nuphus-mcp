@@ -4,7 +4,7 @@ This document describes every tool exposed by the current `nuphus-mcp` build.
 All tools are defined by the MCP Server's `tools/list` response; this document
 is the authoritative human-readable reference.
 
-- **Total tools: 37** — Desktop: 15 · Browser: 22
+- **Total tools: 38** — Desktop: 15 · Browser: 23
 - **Protocol**: JSON-RPC 2.0 over stdio (newline-delimited JSON)
 - **Protocol version**: `2024-11-05`
 - **Supported methods**: `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`
@@ -17,7 +17,7 @@ is the authoritative human-readable reference.
 - [Calling a Tool](#calling-a-tool)
 - [Vision & Local Models](#vision--local-models)
 - [Desktop Tools (15)](#desktop-tools-15)
-- [Browser Tools (22)](#browser-tools-22)
+- [Browser Tools (23)](#browser-tools-23)
 - [End-to-End Example](#end-to-end-example)
 
 ---
@@ -26,7 +26,7 @@ is the authoritative human-readable reference.
 
 Every tool carries an `annotations` field in `tools/list` (MCP spec).
 
-- **`destructiveHint: true`** (26 tools) — write operations that change system or
+- **`destructiveHint: true`** (27 tools) — write operations that change system or
   page state. Clients SHOULD surface a confirmation UI before invoking these.
 - **`readOnlyHint: true`** (11 tools) — read-only operations, safe to auto-run.
 
@@ -46,7 +46,7 @@ Read-only tools (11):
 | `browser_list_downloads` |
 | `browser_wait_for` |
 
-All other tools (26) are marked `destructiveHint`. Note: `desktop_mouse` is
+All other tools (27) are marked `destructiveHint`. Note: `desktop_mouse` is
 conservatively annotated destructive at the schema level because its `action`
 may be `click`/`scroll`/etc. At runtime the confirmation check treats only
 `action: "position"` as read-only. `desktop_vision` / `desktop_perceive` are
@@ -499,7 +499,7 @@ pasting, MUST call `desktop_clipboard_clean` to clear residue.
 
 ---
 
-## Browser Tools (22)
+## Browser Tools (23)
 
 Browser tools operate a Chrome instance over CDP (`chromiumoxide`). The first
 browser call launches a visible Chrome window; `browser_close` closes it and
@@ -616,6 +616,25 @@ selector paths auto-wait for the element to appear and become visible (up to
 **Example**
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_type","arguments":{"selector":"@2","text":"alice@example.com"}}}
+```
+
+---
+
+### browser_press
+
+Press a trusted physical key or modifier chord on the currently focused page
+element. Focus the target first with `browser_click` or `browser_type`. This is
+the native-key path for terminals and canvas applications; unlike
+`browser_evaluate`, it produces `isTrusted: true` keyboard events.
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `key` | string | **yes** | - | Named key, one US-keyboard character, or chord such as `Enter`, `ArrowUp`, `Control+c`, `Shift+Tab`, `Meta+ArrowLeft` |
+| `snapshot` | boolean | no | `false` | Include a post-key page snapshot |
+
+**Example — submit a command typed into a browser terminal**
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_press","arguments":{"key":"Enter"}}}
 ```
 
 ---
@@ -907,7 +926,7 @@ open a page → fill and submit a form.
 ← {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"nuphus-mcp","version":"0.1.0"},...}}
 
 → {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 37 tools ... ]}}
+← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 38 tools ... ]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"desktop_screenshot","arguments":{}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"format\":\"png\",\"data\":\"...\",\"width\":1920,\"height\":1080}"}]}}
@@ -921,5 +940,5 @@ open a page → fill and submit a form.
 
 ---
 
-*Generated from the current `tools/list` schema of `nuphus-mcp`. Only the 37
+*Generated from the current `tools/list` schema of `nuphus-mcp`. Only the 38
 tools listed above are exposed by this version.*

@@ -1971,6 +1971,64 @@ impl BrowserClient {
         Ok(format!("Typed '{}' into {}", text, selector))
     }
 
+    /// Press a physical keyboard key or chord on the currently focused element.
+    ///
+    /// Uses CDP `Input.dispatchKeyEvent`, so page listeners receive trusted
+    /// `keydown` / `keyup` events. Chords use Playwright-style names such as
+    /// `Control+c`, `Shift+Tab`, or `Meta+ArrowLeft`.
+    pub async fn press_key(&self, chord: &str) -> Result<String, BrowserError> {
+        use chromiumoxide::cdp::browser_protocol::input::{
+            DispatchKeyEventParams, DispatchKeyEventType,
+        };
+
+        let (key, modifiers) = parse_key_chord(chord)?;
+        let definition = chromiumoxide::keys::get_key_definition(&key).ok_or_else(|| {
+            BrowserError::Execution(format!(
+                "unsupported key '{key}' in chord '{chord}' (use a named key such as Enter, Tab, ArrowUp, F1, Space, or a single US-keyboard character)"
+            ))
+        })?;
+
+        let mut command = DispatchKeyEventParams::builder()
+            .key(definition.key)
+            .code(definition.code)
+            .windows_virtual_key_code(definition.key_code)
+            .modifiers(modifiers);
+
+        // Ctrl/Alt/Meta shortcuts must not insert the printable target. Enter and
+        // ordinary characters use `keyDown` with text, matching chromiumoxide's
+        // own `Page::press_key` behavior; named non-printable keys use rawKeyDown.
+        let text = if modifiers & (1 | 2 | 4) == 0 {
+            definition
+                .text
+                .or_else(|| (definition.key.chars().count() == 1).then_some(definition.key))
+        } else {
+            None
+        };
+        let down_type = if let Some(text) = text {
+            command = command.text(text);
+            DispatchKeyEventType::KeyDown
+        } else {
+            DispatchKeyEventType::RawKeyDown
+        };
+
+        let key_down = command
+            .clone()
+            .r#type(down_type)
+            .build()
+            .map_err(|e| BrowserError::Execution(format!("keyDown build: {e}")))?;
+        let key_up = command
+            .r#type(DispatchKeyEventType::KeyUp)
+            .build()
+            .map_err(|e| BrowserError::Execution(format!("keyUp build: {e}")))?;
+
+        let page = self.get_page().await?;
+        let page_guard = page.lock().await;
+        cdp_ctx("keyboard keyDown failed", page_guard.execute(key_down)).await?;
+        cdp_ctx("keyboard keyUp failed", page_guard.execute(key_up)).await?;
+
+        Ok(format!("Pressed {chord}"))
+    }
+
     /// Arm the in-page DOM-change detector. Call *before* a write action, then
     /// `wait_for_change` after it to confirm the action took effect.
     ///
@@ -3554,11 +3612,77 @@ fn js_string_literal(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+/// Parse a Playwright-style key chord into a chromiumoxide key name and the
+/// CDP modifier bit field (Alt=1, Control=2, Meta=4, Shift=8).
+fn parse_key_chord(chord: &str) -> Result<(String, i64), BrowserError> {
+    let chord = chord.trim();
+    if chord.is_empty() {
+        return Err(BrowserError::Execution(
+            "key chord must not be empty".to_string(),
+        ));
+    }
+
+    // `+` is itself a valid key. `Plus` also avoids ambiguity in modifier chords.
+    if chord == "+" {
+        return Ok(("+".to_string(), 0));
+    }
+
+    let mut parts: Vec<&str> = chord.split('+').map(str::trim).collect();
+    let target = parts.pop().unwrap_or_default();
+    if target.is_empty() {
+        return Err(BrowserError::Execution(format!(
+            "invalid key chord '{chord}': missing target key (use Plus for the '+' key in a chord)"
+        )));
+    }
+
+    let mut modifiers = 0;
+    for modifier in parts {
+        let bit = match modifier.to_ascii_lowercase().as_str() {
+            "alt" | "option" => 1,
+            "control" | "ctrl" => 2,
+            "meta" | "command" | "cmd" => 4,
+            "shift" => 8,
+            _ => {
+                return Err(BrowserError::Execution(format!(
+                    "unsupported modifier '{modifier}' in chord '{chord}' (expected Alt, Control, Meta, or Shift)"
+                )))
+            }
+        };
+        modifiers |= bit;
+    }
+
+    let key = match target.to_ascii_lowercase().as_str() {
+        "space" => " ",
+        "plus" => "+",
+        "return" => "Enter",
+        "esc" => "Escape",
+        "del" => "Delete",
+        _ => target,
+    };
+    Ok((key.to_string(), modifiers))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // ── Unit tests (no browser) ──
+
+    #[test]
+    fn key_chord_parser_supports_terminal_keys_and_aliases() {
+        assert_eq!(parse_key_chord("Enter").unwrap(), ("Enter".into(), 0));
+        assert_eq!(parse_key_chord("Ctrl+c").unwrap(), ("c".into(), 2));
+        assert_eq!(
+            parse_key_chord("Control+Shift+P").unwrap(),
+            ("P".into(), 10)
+        );
+        assert_eq!(parse_key_chord("Cmd+ArrowLeft").unwrap().1, 4);
+        assert_eq!(parse_key_chord("Space").unwrap(), (" ".into(), 0));
+        assert_eq!(parse_key_chord("Shift+Plus").unwrap(), ("+".into(), 8));
+        assert!(parse_key_chord("").is_err());
+        assert!(parse_key_chord("Control+").is_err());
+        assert!(parse_key_chord("Hyper+x").is_err());
+    }
 
     #[test]
     fn actionability_script_escapes_selector_and_embeds_constants() {
@@ -4070,6 +4194,67 @@ setTimeout(function(){ document.getElementById('will-show').style.display = 'blo
     const STATIC_PAGE: &str = r#"<!doctype html><html><body>
 <div id="static-node">static</div>
 </body></html>"#;
+
+    const KEYBOARD_PAGE: &str = r#"<!doctype html><html><body>
+<button id="previous">previous focus target</button>
+<textarea id="target" autofocus></textarea>
+<script>
+window.events = [];
+const target = document.getElementById('target');
+target.addEventListener('keydown', function(event) {
+    window.events.push({
+        type: event.type,
+        key: event.key,
+        code: event.code,
+        alt: event.altKey,
+        ctrl: event.ctrlKey,
+        meta: event.metaKey,
+        shift: event.shiftKey,
+        trusted: event.isTrusted
+    });
+});
+</script>
+</body></html>"#;
+
+    /// Native keyboard dispatch: named keys and modifier chords reach the
+    /// focused element as trusted DOM keyboard events.
+    #[tokio::test]
+    #[ignore = "launches real Chrome; requires Chrome installed locally"]
+    async fn press_key_dispatches_trusted_events_real_chrome() {
+        let mut client = isolated_client("keyboard");
+        client.launch(true).await.expect("launch headless");
+        client
+            .navigate(&fixture_url("keyboard", KEYBOARD_PAGE))
+            .await
+            .expect("navigate");
+
+        client.press_key("Enter").await.expect("press Enter");
+        client.press_key("Ctrl+c").await.expect("press Ctrl+c");
+        client
+            .press_key("Shift+Tab")
+            .await
+            .expect("press Shift+Tab");
+
+        let value = client
+            .evaluate("JSON.stringify(window.events)")
+            .await
+            .expect("read events");
+        let serialized = value.as_str().expect("events JSON string");
+        let events: Vec<serde_json::Value> =
+            serde_json::from_str(serialized).expect("parse events");
+        assert_eq!(events.len(), 3, "events: {serialized}");
+        assert_eq!(events[0]["key"], "Enter");
+        assert_eq!(events[0]["code"], "Enter");
+        assert_eq!(events[0]["trusted"], true);
+        assert_eq!(events[1]["key"], "c");
+        assert_eq!(events[1]["ctrl"], true);
+        assert_eq!(events[1]["trusted"], true);
+        assert_eq!(events[2]["key"], "Tab");
+        assert_eq!(events[2]["shift"], true);
+
+        client.close().await.expect("close");
+        cleanup_profile("keyboard");
+    }
 
     /// Regression: a second operation on an established connection must not kill the page.
     ///

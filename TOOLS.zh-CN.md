@@ -3,7 +3,7 @@
 本文档描述当前 `nuphus-mcp` 构建暴露的全部工具。所有工具与 `tools/list`
 返回的 schema 一致，本文档是权威的人类可读参考。
 
-- **工具总数：37** —— 桌面 15 · 浏览器 22
+- **工具总数：38** —— 桌面 15 · 浏览器 23
 - **协议**：JSON-RPC 2.0 over stdio（换行分隔 JSON）
 - **协议版本**：`2024-11-05`
 - **支持的方法**：`initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call`
@@ -16,7 +16,7 @@
 - [调用工具](#调用工具)
 - [视觉与本地模型](#视觉与本地模型)
 - [桌面工具（15）](#桌面工具15)
-- [浏览器工具（22）](#浏览器工具22)
+- [浏览器工具（23）](#浏览器工具23)
 - [端到端示例](#端到端示例)
 
 ---
@@ -25,7 +25,7 @@
 
 每个工具在 `tools/list` 中都带 `annotations` 字段（MCP 规范）。
 
-- **`destructiveHint: true`**（26 个）——写操作，会改变系统或页面状态。客户端
+- **`destructiveHint: true`**（27 个）——写操作，会改变系统或页面状态。客户端
   在调用前应展示确认 UI。
 - **`readOnlyHint: true`**（11 个）——只读操作，可安全自动执行。
 
@@ -45,7 +45,7 @@
 | `browser_list_downloads` |
 | `browser_wait_for` |
 
-其余 26 个工具均标注 `destructiveHint`。注意：`desktop_mouse` 在 schema 层面
+其余 27 个工具均标注 `destructiveHint`。注意：`desktop_mouse` 在 schema 层面
 保守标注为 destructive（因为其 `action` 可能是 click/scroll 等写操作）；
 运行时确认检查只把 `action: "position"` 视为只读。`desktop_vision` /
 `desktop_perceive` 是只读工具（读取屏幕）；`desktop_perceive` 首次调用可能
@@ -469,7 +469,7 @@ OCR 模型缺失且下载失败时：`isError: true` + 明确错误与手动下�
 
 ---
 
-## 浏览器工具（22）
+## 浏览器工具（23）
 
 浏览器工具通过 CDP（`chromiumoxide`）操作 Chrome 实例。首次浏览器调用会启动
 一个可见的 Chrome 窗口；`browser_close` 关闭并释放资源。CDP 操作有 15 秒超时
@@ -579,6 +579,24 @@ CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 �
 **示例**
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_type","arguments":{"selector":"@2","text":"alice@example.com"}}}
+```
+
+---
+
+### browser_press
+
+向当前聚焦的页面元素发送可信物理按键或组合键。先用 `browser_click` 或
+`browser_type` 聚焦目标。它是终端和 canvas 应用的原生按键通道；与
+`browser_evaluate` 不同，产生的键盘事件满足 `isTrusted: true`。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `key` | string | **是** | - | 命名键、单个美式键盘字符或组合键，如 `Enter`、`ArrowUp`、`Control+c`、`Shift+Tab`、`Meta+ArrowLeft` |
+| `snapshot` | boolean | 否 | `false` | 是否附带按键后的页面快照 |
+
+**示例——提交已输入浏览器终端的命令**
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_press","arguments":{"key":"Enter"}}}
 ```
 
 ---
@@ -864,7 +882,7 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 ← {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"nuphus-mcp","version":"0.1.0"},...}}
 
 → {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 37 个工具 ... ]}}
+← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 38 个工具 ... ]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"desktop_screenshot","arguments":{}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"format\":\"png\",\"data\":\"...\",\"width\":1920,\"height\":1080}"}]}}
@@ -879,4 +897,4 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 ---
 
 *依据当前 `nuphus-mcp` 构建的 `tools/list` schema 生成。本版本仅暴露以上
-37 个工具。*
+38 个工具。*

@@ -24,7 +24,7 @@ fn is_write_tool_name_only(name: &str) -> bool {
             | "desktop_screenshot" | "desktop_clipboard_write"
             | "desktop_clipboard_clean"
             // browser writes
-            | "browser_navigate" | "browser_click" | "browser_type" | "browser_exec"
+            | "browser_navigate" | "browser_click" | "browser_type" | "browser_press" | "browser_exec"
             | "browser_scroll" | "browser_screenshot" | "browser_close" | "browser_evaluate"
             | "browser_back" | "browser_forward" | "browser_cookies_set"
             | "browser_import_cookies" | "browser_upload" | "browser_drag_files" | "browser_new_tab"
@@ -274,6 +274,7 @@ mod tests {
             &json!({"action":"position"})
         ));
         assert!(is_write_tool("browser_click", &json!({"selector":"#a"})));
+        assert!(is_write_tool("browser_press", &json!({"key":"Enter"})));
         assert!(is_write_tool(
             "browser_drag_files",
             &json!({"selector":"#drop","file_paths":["/tmp/a"]})

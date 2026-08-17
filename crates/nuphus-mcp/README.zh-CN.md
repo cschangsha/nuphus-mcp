@@ -16,7 +16,7 @@
 
 - **桌面自动化（15 个工具）**：屏幕分辨率、截图（PNG/base64）、窗口列表、窗口激活、窗口截图、**窗口移动/缩放/信息查询**、鼠标点击/拖拽/滚轮/定位、键盘输入/快捷键、剪贴板写入/清空 —— 基于 `desktop-api` crate（xcap + Win32），不依赖 Tauri。
 - **计算机视觉（2 个工具）**：`desktop_vision`（BYOK —— 截图发送到你自己的视觉模型，OpenAI 兼容或 Anthropic 原生 API）与 `desktop_perceive`（本地 OCR + YOLO 元素定位，PaddleOCR，首次运行自动下载模型）。
-- **浏览器自动化（21 个工具）**：导航、快照（无障碍树 `@N` 引用）、点击、输入、批量脚本、滚动、正文提取、截图、JS 执行、前进/后退、等待、Cookie 读写/导入、文件上传、标签页、下载目录 —— 基于 `nuphus-browser`（chromiumoxide CDP，与 Nuphus 主程序共用）。
+- **浏览器自动化（23 个工具）**：导航、快照（无障碍树 `@N` 引用）、点击、输入、可信键盘按键/组合键、批量脚本、滚动、正文提取、截图、JS 执行、前进/后退、等待、Cookie 读写/导入、文件上传/拖放、标签页、下载目录 —— 基于 `nuphus-browser`（chromiumoxide CDP，与 Nuphus 主程序共用）。
 - **零成本 stdio**：无 HTTP 服务、无常驻进程。进程从 stdin 读单行 JSON，向 stdout 写响应。
 - **安全优先**：破坏性工具按 MCP 规范标注；可选严格确认模式；截图、上传和文件拖放路径校验。
 - **Dogfooding**：Nuphus 主程序自身通过 MCP client 调用本 server（双通道），MCP 层被真实使用持续验证。
@@ -177,7 +177,7 @@ cargo run -p nuphus-mcp --example demo
 
 ```
 [1] initialize OK → server=nuphus-mcp, protocol=2024-11-05
-[2] tools/list OK → 37 tools (desktop 15 + browser 22), 26 marked destructive
+[2] tools/list OK → 38 tools (desktop 15 + browser 23), 27 marked destructive
 [3] desktop_screen_size → {"height":1080,"width":1920}
 [4] browser_navigate → Navigated to: data:text/html,...  | Title: Untitled
 [5] browser_evaluate → "nuphus-mcp demo"
@@ -206,13 +206,14 @@ cargo run -p nuphus-mcp --example demo
 | `desktop_clipboard_write` | 写入长文本（>500 字符）到剪贴板 |
 | `desktop_clipboard_clean` | 清空系统剪贴板 |
 
-### 浏览器（22 个）
+### 浏览器（23 个）
 
 | 工具 | 说明 |
 |------|------|
 | `browser_navigate` | 打开 URL（导航后自动快照） |
 | `browser_snapshot` | 无障碍树快照，带 `@N` 引用 |
 | `browser_click` / `browser_type` | 左/右/中键点击 / 输入（CSS 选择器或 `@N`） |
+| `browser_press` | 向当前聚焦元素发送可信按键或组合键（`Enter`、`Control+c`、`Shift+Tab`） |
 | `browser_exec` | 单次 CDP 往返执行多步脚本 |
 | `browser_scroll` / `browser_extract` | 滚动页面 / 提取可读文本 |
 | `browser_screenshot` | 当前页面截图 |
