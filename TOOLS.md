@@ -4,7 +4,7 @@ This document describes every tool exposed by `nuphus-mcp` (version 0.1.0).
 All tools are defined by the MCP Server's `tools/list` response; this document
 is the authoritative human-readable reference.
 
-- **Total tools: 36** — Desktop: 15 · Browser: 21
+- **Total tools: 37** — Desktop: 15 · Browser: 22
 - **Protocol**: JSON-RPC 2.0 over stdio (newline-delimited JSON)
 - **Protocol version**: `2024-11-05`
 - **Supported methods**: `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`
@@ -17,7 +17,7 @@ is the authoritative human-readable reference.
 - [Calling a Tool](#calling-a-tool)
 - [Vision & Local Models](#vision--local-models)
 - [Desktop Tools (15)](#desktop-tools-15)
-- [Browser Tools (21)](#browser-tools-21)
+- [Browser Tools (22)](#browser-tools-22)
 - [End-to-End Example](#end-to-end-example)
 
 ---
@@ -26,7 +26,7 @@ is the authoritative human-readable reference.
 
 Every tool carries an `annotations` field in `tools/list` (MCP spec).
 
-- **`destructiveHint: true`** (25 tools) — write operations that change system or
+- **`destructiveHint: true`** (26 tools) — write operations that change system or
   page state. Clients SHOULD surface a confirmation UI before invoking these.
 - **`readOnlyHint: true`** (11 tools) — read-only operations, safe to auto-run.
 
@@ -46,7 +46,7 @@ Read-only tools (11):
 | `browser_list_downloads` |
 | `browser_wait_for` |
 
-All other tools (25) are marked `destructiveHint`. Note: `desktop_mouse` is
+All other tools (26) are marked `destructiveHint`. Note: `desktop_mouse` is
 conservatively annotated destructive at the schema level because its `action`
 may be `click`/`scroll`/etc. At runtime the confirmation check treats only
 `action: "position"` as read-only. `desktop_vision` / `desktop_perceive` are
@@ -76,7 +76,9 @@ effect occurs. Read-only tools are never affected.
 ### Path validation
 
 Screenshot save paths are validated to reject path traversal (`..`) and system
-protected directories. `browser_upload` requires the file to actually exist.
+protected directories. `browser_upload` requires the file to actually exist;
+`browser_drag_files` accepts only existing files or directories and canonicalizes
+their paths before passing them to Chrome.
 
 ---
 
@@ -497,7 +499,7 @@ pasting, MUST call `desktop_clipboard_clean` to clear residue.
 
 ---
 
-## Browser Tools (21)
+## Browser Tools (22)
 
 Browser tools operate a Chrome instance over CDP (`chromiumoxide`). The first
 browser call launches a visible Chrome window; `browser_close` closes it and
@@ -570,15 +572,18 @@ Click element by CSS selector or ref ID from snapshot (e.g. `@1`, `@e0`,
 `'button'`). CSS selector paths auto-wait for the element to appear and become
 visible (up to 5s) before clicking.
 
-Default clicks are JS-synthesized (reliable, ignore overlays) but do NOT
+Default left clicks are JS-synthesized (reliable, ignore overlays) but do NOT
 produce user activation. Pass `trusted: true` to dispatch real CDP mouse
-events (`isTrusted=true`) at the element's center — required to unlock
-autoplay-gated audio/video playback and other gesture-gated features.
+events (`isTrusted=true`) at the element's center. Right and middle clicks
+always use trusted CDP events. Post-click snapshots default to off for
+right/middle clicks so transient context menus remain open for the next call.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `selector` | string | **yes** | - | CSS selector or ref ID (e.g. `@1`, `@e0`, `'button'`) |
 | `trusted` | boolean | no | `false` | Dispatch real trusted CDP mouse events (produces user activation) instead of a JS click. Use for autoplay-gated media playback and gesture-gated features. |
+| `button` | string | no | `left` | Mouse button: `left`, `right`, or `middle`. Right and middle are always trusted. |
+| `snapshot` | boolean | no | button-dependent | Include a post-click snapshot; defaults to `true` for left and `false` for right/middle. |
 
 **Example**
 ```json
@@ -586,6 +591,9 @@ autoplay-gated audio/video playback and other gesture-gated features.
 ```
 ```json
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_click","arguments":{"selector":"button.play","trusted":true}}}
+```
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_click","arguments":{"selector":".file-row","button":"right"}}}
 ```
 **Returns** click confirmation followed by a `── Page state ──` snapshot.
 
@@ -805,6 +813,25 @@ must exist on disk.
 
 ---
 
+### browser_drag_files
+
+Drag one or more existing local files or directories onto any browser element
+using native Chrome DevTools drag events. This does not require an
+`input[type=file]` element, does not base64-encode contents, and therefore is
+not subject to the MCP request-line size limit.
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `selector` | string | **yes** | - | CSS selector or snapshot ref for the drop target |
+| `file_paths` | string[] | **yes** | - | Absolute paths of existing local files or directories |
+
+**Example**
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_drag_files","arguments":{"selector":".explorer-viewlet","file_paths":["/Users/me/report.pdf","/Users/me/assets"]}}}
+```
+
+---
+
 ### browser_list_downloads
 
 List files in the browser download directory.
@@ -852,7 +879,7 @@ List all open tabs with IDs, URLs, and titles.
 
 ### browser_switch_tab
 
-Switch focus to a tab by index.
+Switch to a tab by index and bring it to the front in the visible Chrome window.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
@@ -875,7 +902,7 @@ open a page → fill and submit a form.
 ← {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"nuphus-mcp","version":"0.1.0"},...}}
 
 → {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 36 tools ... ]}}
+← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 37 tools ... ]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"desktop_screenshot","arguments":{}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"format\":\"png\",\"data\":\"...\",\"width\":1920,\"height\":1080}"}]}}
@@ -889,5 +916,5 @@ open a page → fill and submit a form.
 
 ---
 
-*Generated from the `tools/list` schema of `nuphus-mcp` v0.1.0. Only the 36
+*Generated from the `tools/list` schema of `nuphus-mcp` v0.1.0. Only the 37
 tools listed above are exposed by this version.*

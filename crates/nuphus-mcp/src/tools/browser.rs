@@ -32,6 +32,7 @@ pub const EXECUTABLE_BROWSER_TOOLS: &[&str] = &[
     "browser_evaluate",
     "browser_wait_for",
     "browser_upload",
+    "browser_drag_files",
     "browser_list_downloads",
     "browser_new_tab",
     "browser_list_tabs",
@@ -332,21 +333,28 @@ async fn run_op(
                 .get("trusted")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let button = args.get("button").and_then(Value::as_str).unwrap_or("left");
+            if !matches!(button, "left" | "right" | "middle") {
+                return Err(BrowserError::Execution(format!(
+                    "browser_click: unsupported button '{button}' (expected left, right, or middle)"
+                )));
+            }
             // Effect verification: arm the change detector before dispatching,
             // then wait a window for the page to react. A click that changes
             // nothing within the window very likely did not take effect (dead
             // button / covered element / wrong selector) — surface it instead of
             // letting the next step proceed on a false "clicked" premise.
             let effect_timeout = effect_timeout_ms();
-            if effect_timeout > 0 {
+            let verify_effect = button == "left" && effect_timeout > 0;
+            if verify_effect {
                 client.arm_change_detector().await?;
             }
-            let result = if trusted {
-                client.click_trusted(selector).await?
+            let result = if trusted || button != "left" {
+                client.click_trusted(selector, button).await?
             } else {
                 client.click(selector).await?
             };
-            if effect_timeout > 0 && !client.wait_for_change(effect_timeout).await? {
+            if verify_effect && !client.wait_for_change(effect_timeout).await? {
                 return Err(BrowserError::Execution(format!(
                     "Click on '{}' executed but no DOM change was detected within {}ms — the click \
                      likely did not take effect (dead/covered element, wrong selector, or an \
@@ -354,6 +362,13 @@ async fn run_op(
                      page state with browser_snapshot / browser_list_tabs before the next step.",
                     selector, effect_timeout
                 )));
+            }
+            let include_snapshot = args
+                .get("snapshot")
+                .and_then(Value::as_bool)
+                .unwrap_or(button == "left");
+            if !include_snapshot {
+                return Ok(result);
             }
             match client.snapshot(false, None).await {
                 Ok(snap) => format!("{}\n\n── Page state ──\n{}", result, snap),
@@ -468,6 +483,43 @@ async fn run_op(
             // Security boundary: the file to upload must really exist
             crate::security::validate_upload_file(file_path).map_err(BrowserError::Execution)?;
             client.upload_file(selector, file_path).await?
+        }
+        "browser_drag_files" => {
+            let selector = args
+                .get("selector")
+                .and_then(Value::as_str)
+                .or_else(|| args.get("ref").and_then(Value::as_str))
+                .unwrap_or("");
+            if selector.is_empty() {
+                return Err(BrowserError::Execution(
+                    "browser_drag_files: selector or ref parameter is required".to_string(),
+                ));
+            }
+            let file_paths = args
+                .get("file_paths")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    BrowserError::Execution(
+                        "browser_drag_files: file_paths must be a non-empty array".to_string(),
+                    )
+                })?;
+            if file_paths.is_empty() {
+                return Err(BrowserError::Execution(
+                    "browser_drag_files: file_paths must be a non-empty array".to_string(),
+                ));
+            }
+            let mut canonical_paths = Vec::with_capacity(file_paths.len());
+            for value in file_paths {
+                let path = value.as_str().ok_or_else(|| {
+                    BrowserError::Execution(
+                        "browser_drag_files: every file_paths entry must be a string".to_string(),
+                    )
+                })?;
+                canonical_paths.push(
+                    crate::security::validate_drag_path(path).map_err(BrowserError::Execution)?,
+                );
+            }
+            client.drag_files(selector, &canonical_paths).await?
         }
         "browser_list_downloads" => client.list_downloads()?,
         "browser_new_tab" => {

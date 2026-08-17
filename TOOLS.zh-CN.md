@@ -3,7 +3,7 @@
 本文档描述 `nuphus-mcp`（v0.1.0）暴露的全部工具。所有工具与 `tools/list`
 返回的 schema 一致，本文档是权威的人类可读参考。
 
-- **工具总数：36** —— 桌面 15 · 浏览器 21
+- **工具总数：37** —— 桌面 15 · 浏览器 22
 - **协议**：JSON-RPC 2.0 over stdio（换行分隔 JSON）
 - **协议版本**：`2024-11-05`
 - **支持的方法**：`initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call`
@@ -16,7 +16,7 @@
 - [调用工具](#调用工具)
 - [视觉与本地模型](#视觉与本地模型)
 - [桌面工具（15）](#桌面工具15)
-- [浏览器工具（21）](#浏览器工具21)
+- [浏览器工具（22）](#浏览器工具22)
 - [端到端示例](#端到端示例)
 
 ---
@@ -25,7 +25,7 @@
 
 每个工具在 `tools/list` 中都带 `annotations` 字段（MCP 规范）。
 
-- **`destructiveHint: true`**（25 个）——写操作，会改变系统或页面状态。客户端
+- **`destructiveHint: true`**（26 个）——写操作，会改变系统或页面状态。客户端
   在调用前应展示确认 UI。
 - **`readOnlyHint: true`**（11 个）——只读操作，可安全自动执行。
 
@@ -45,7 +45,7 @@
 | `browser_list_downloads` |
 | `browser_wait_for` |
 
-其余 25 个工具均标注 `destructiveHint`。注意：`desktop_mouse` 在 schema 层面
+其余 26 个工具均标注 `destructiveHint`。注意：`desktop_mouse` 在 schema 层面
 保守标注为 destructive（因为其 `action` 可能是 click/scroll 等写操作）；
 运行时确认检查只把 `action: "position"` 视为只读。`desktop_vision` /
 `desktop_perceive` 是只读工具（读取屏幕）；`desktop_perceive` 首次调用可能
@@ -72,7 +72,8 @@
 ### 路径校验
 
 截图保存路径会校验，拒绝路径穿越（`..`）和系统保护目录；
-`browser_upload` 要求文件真实存在。
+`browser_upload` 要求文件真实存在；`browser_drag_files` 只接受真实存在的文件或
+目录，并在交给 Chrome 前将路径规范化为绝对路径。
 
 ---
 
@@ -468,7 +469,7 @@ OCR 模型缺失且下载失败时：`isError: true` + 明确错误与手动下�
 
 ---
 
-## 浏览器工具（21）
+## 浏览器工具（22）
 
 浏览器工具通过 CDP（`chromiumoxide`）操作 Chrome 实例。首次浏览器调用会启动
 一个可见的 Chrome 窗口；`browser_close` 关闭并释放资源。CDP 操作有 15 秒超时
@@ -537,14 +538,17 @@ DOM 遍历。`@N` 引用可用于 `browser_click` / `browser_type`。
 通过 CSS 选择器或快照中的引用 ID（如 `@1`、`@e0`、`'button'`）点击元素。
 CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 秒）。
 
-默认点击是 JS 合成事件（可靠、可穿透遮挡层），但**不产生**用户激活（user activation）。
-传入 `trusted: true` 可改为在元素中心派发真实 CDP 鼠标事件（`isTrusted=true`）——
-用于解锁受自动播放策略限制的音视频播放等需要真实用户手势的场景。
+默认左键点击是 JS 合成事件（可靠、可穿透遮挡层），但**不产生**用户激活
+（user activation）。传入 `trusted: true` 可改为在元素中心派发真实 CDP
+鼠标事件（`isTrusted=true`）。右键和中键始终使用可信 CDP 事件。
+右键和中键默认不生成点击后快照，避免瞬态上下文菜单在下一步前消失。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
 | `selector` | string | **是** | - | CSS 选择器或引用 ID（如 `@1`、`@e0`、`'button'`） |
 | `trusted` | boolean | 否 | `false` | 派发真实可信 CDP 鼠标事件（产生用户激活）替代 JS 点击。用于自动播放受限的媒体播放等手势受限场景。 |
+| `button` | string | 否 | `left` | 鼠标键：`left`、`right` 或 `middle`；右键和中键始终可信。 |
+| `snapshot` | boolean | 否 | 随按键而定 | 是否附带点击后快照；左键默认 `true`，右键/中键默认 `false`。 |
 
 **示例**
 ```json
@@ -552,6 +556,9 @@ CSS 选择器路径会在点击前自动等待元素出现并可见（最多 5 �
 ```
 ```json
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_click","arguments":{"selector":"button.play","trusted":true}}}
+```
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_click","arguments":{"selector":".file-row","button":"right"}}}
 ```
 **返回** 点击确认，随后带 `── Page state ──` 页面快照。
 
@@ -766,6 +773,24 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 
 ---
 
+### browser_drag_files
+
+通过 Chrome DevTools 原生拖放事件，把一个或多个本地文件或目录拖到任意浏览器
+元素上。不要求页面存在 `input[type=file]`，不对文件内容做 Base64 编码，因此
+不受 MCP 请求行大小限制。
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+|------|------|------|------|------|
+| `selector` | string | **是** | - | 放置目标的 CSS 选择器或快照引用 |
+| `file_paths` | string[] | **是** | - | 真实存在的本地文件或目录绝对路径 |
+
+**示例**
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"browser_drag_files","arguments":{"selector":".explorer-viewlet","file_paths":["/Users/me/report.pdf","/Users/me/assets"]}}}
+```
+
+---
+
 ### browser_list_downloads
 
 列出浏览器下载目录中的文件。
@@ -813,7 +838,7 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 
 ### browser_switch_tab
 
-按索引切换焦点标签页。
+按索引切换标签页，并在可见的 Chrome 窗口中将其真正置前。
 
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 |------|------|------|------|------|
@@ -835,7 +860,7 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 ← {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"nuphus-mcp","version":"0.1.0"},...}}
 
 → {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 36 个工具 ... ]}}
+← {"jsonrpc":"2.0","id":1,"result":{"tools":[ ... 37 个工具 ... ]}}
 
 → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"desktop_screenshot","arguments":{}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"format\":\"png\",\"data\":\"...\",\"width\":1920,\"height\":1080}"}]}}
@@ -850,4 +875,4 @@ Cookie 数据源；裸装 `nuphus-mcp` 时可能不可用，会返回说明性�
 ---
 
 *依据 `nuphus-mcp` v0.1.0 的 `tools/list` schema 生成。本版本仅暴露以上
-36 个工具。*
+37 个工具。*

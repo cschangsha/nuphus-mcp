@@ -246,11 +246,13 @@ fn browser_tools() -> Vec<ToolDef> {
         ),
         tool_def(
             "browser_click",
-            "Click element by CSS selector or ref ID from snapshot (e.g. @1, @e0, 'button'). CSS selector path auto-waits for the element to appear and become visible (up to 5s) before clicking. Default clicks are JS-synthesized (reliable, ignore overlays) but do NOT produce user activation; pass trusted=true to dispatch real CDP mouse events (isTrusted=true) instead — required to unlock autoplay-gated audio/video playback and other gesture-gated features.",
+            "Click element by CSS selector or ref ID from snapshot (e.g. @1, @e0, 'button'). CSS selector path auto-waits for the element to appear and become visible (up to 5s) before clicking. Default left clicks are JS-synthesized (reliable, ignore overlays) but do NOT produce user activation; pass trusted=true to dispatch real CDP mouse events (isTrusted=true) instead. Right and middle clicks always use trusted CDP events.",
             json_props! {
                 "selector" => obj!("type"="string","description"="CSS selector or ref ID (e.g. @1, @e0, 'button')"),
                 "ref" => obj!("type"="string","description"="Ref ID from snapshot (e.g. @1, @e0); alias of selector — provide either one"),
-                "trusted" => obj!("type"="boolean","description"="Dispatch real trusted CDP mouse events at the element's center (produces user activation). Use for autoplay-gated media playback and gesture-gated features. Default false (JS click).")
+                "trusted" => obj!("type"="boolean","description"="Dispatch real trusted CDP mouse events at the element's center (produces user activation). Default false for left clicks; right and middle clicks are always trusted."),
+                "button" => obj!("type"="string","enum"=["left","right","middle"],"default"="left","description"="Mouse button. Right and middle clicks use trusted CDP events automatically."),
+                "snapshot" => obj!("type"="boolean","description"="Include a post-click page snapshot. Defaults to true for left clicks and false for right/middle clicks so transient context menus remain open for the next operation.")
             },
             &["selector"],
         ),
@@ -360,6 +362,16 @@ fn browser_tools() -> Vec<ToolDef> {
             &["selector", "file_path"],
         ),
         tool_def(
+            "browser_drag_files",
+            "Drag one or more existing local files or directories onto a browser element using native Chrome DevTools drag events. Unlike browser_upload, this does not require an input[type=file] element and does not base64-encode file contents.",
+            json_props! {
+                "selector" => obj!("type"="string","description"="CSS selector or ref ID of the drop target (e.g. @1, @e0, '.explorer-viewlet')"),
+                "ref" => obj!("type"="string","description"="Ref ID from snapshot; alias of selector — provide either one"),
+                "file_paths" => obj!("type"="array","items"=obj!("type"="string"),"minItems"=1,"description"="Absolute paths of existing local files or directories to drag")
+            },
+            &["selector", "file_paths"],
+        ),
+        tool_def(
             "browser_list_downloads",
             "List files in the browser download directory.",
             json!({}),
@@ -438,8 +450,8 @@ mod tests {
             .iter()
             .filter(|t| is_write_tool_schema(t.name))
             .count();
-        // Regression anchor from issue #1: exactly 25 write tools.
-        assert_eq!(write_count, 25, "expected 25 write tools");
+        // Regression anchor from issue #1 plus browser_drag_files: exactly 26 write tools.
+        assert_eq!(write_count, 26, "expected 26 write tools");
 
         for tool in &tools {
             let props = tool.input_schema["properties"]
@@ -542,8 +554,8 @@ mod tests {
         }
 
         assert_eq!(
-            write_tools_checked, 25,
-            "expected all 25 write tools to be exercised"
+            write_tools_checked, 26,
+            "expected all 26 write tools to be exercised"
         );
     }
 }

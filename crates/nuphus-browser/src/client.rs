@@ -1704,9 +1704,24 @@ impl BrowserClient {
     /// Trade-off: coordinate-based dispatch hits whatever is topmost at the point,
     /// so an element covered by an overlay will NOT receive the click. The default
     /// `click` (JS path) ignores overlays; use trusted only when activation is needed.
-    pub async fn click_trusted(&self, selector: &str) -> Result<String, BrowserError> {
+    pub async fn click_trusted(
+        &self,
+        selector: &str,
+        button: &str,
+    ) -> Result<String, BrowserError> {
         use chromiumoxide::cdp::browser_protocol::input::{
             DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
+        };
+
+        let (mouse_button, button_mask) = match button {
+            "left" => (MouseButton::Left, 1),
+            "right" => (MouseButton::Right, 2),
+            "middle" => (MouseButton::Middle, 4),
+            other => {
+                return Err(BrowserError::Execution(format!(
+                    "unsupported mouse button '{other}'"
+                )))
+            }
         };
 
         let page = self.get_page().await?;
@@ -1727,11 +1742,12 @@ impl BrowserClient {
         let cmd = DispatchMouseEventParams::builder()
             .x(x)
             .y(y)
-            .button(MouseButton::Left)
+            .button(mouse_button)
             .click_count(1);
         let pressed = cmd
             .clone()
             .r#type(DispatchMouseEventType::MousePressed)
+            .buttons(button_mask)
             .build()
             .map_err(|e| BrowserError::Execution(format!("mousePressed build: {e}")))?;
         cdp_ctx(
@@ -1741,6 +1757,7 @@ impl BrowserClient {
         .await?;
         let released = cmd
             .r#type(DispatchMouseEventType::MouseReleased)
+            .buttons(0)
             .build()
             .map_err(|e| BrowserError::Execution(format!("mouseReleased build: {e}")))?;
         cdp_ctx(
@@ -1749,7 +1766,7 @@ impl BrowserClient {
         )
         .await?;
 
-        Ok(format!("Clicked (trusted): {}", selector))
+        Ok(format!("Clicked (trusted, {}): {}", button, selector))
     }
 
     /// Resolve an element's center point in viewport CSS pixels, scrolling it into
@@ -2566,6 +2583,53 @@ impl BrowserClient {
         Ok(value)
     }
 
+    /// Drag existing local files or directories onto an element using Chrome's
+    /// native DevTools drag-event path. Chrome reads the paths directly, so file
+    /// contents are not copied through JavaScript or base64-encoded.
+    pub async fn drag_files(
+        &self,
+        selector: &str,
+        file_paths: &[String],
+    ) -> Result<String, BrowserError> {
+        use chromiumoxide::cdp::browser_protocol::input::{
+            DispatchDragEventParams, DispatchDragEventType, DragData, DragDataItem,
+        };
+
+        if file_paths.is_empty() {
+            return Err(BrowserError::Execution(
+                "drag_files requires at least one path".to_string(),
+            ));
+        }
+
+        let page = self.get_page().await?;
+        let page_guard = page.lock().await;
+        let (x, y) = self.element_center(&page_guard, selector).await?;
+
+        let drag_data = DragData::builder()
+            // Chromium requires the `items` field even for file-only drags; the
+            // generated CDP type omits an empty Vec during serialization.
+            .item(DragDataItem::new("text/plain", ""))
+            .files(file_paths.iter().cloned())
+            .drag_operations_mask(1)
+            .build()
+            .map_err(|e| BrowserError::Execution(format!("drag data build: {e}")))?;
+
+        for event_type in [
+            DispatchDragEventType::DragEnter,
+            DispatchDragEventType::DragOver,
+            DispatchDragEventType::Drop,
+        ] {
+            let event = DispatchDragEventParams::new(event_type, x, y, drag_data.clone());
+            cdp_ctx("file drag event failed", page_guard.execute(event)).await?;
+        }
+
+        Ok(format!(
+            "Dragged {} path(s) onto {}",
+            file_paths.len(),
+            selector
+        ))
+    }
+
     /// Scroll page
     pub async fn scroll(&self, direction: &str, amount: i32) -> Result<String, BrowserError> {
         let page = self.get_page().await?;
@@ -3140,6 +3204,8 @@ impl BrowserClient {
         let page = pages
             .get(index)
             .ok_or_else(|| BrowserError::Execution("Invalid tab index".to_string()))?;
+
+        cdp_ctx("bring selected tab to front failed", page.bring_to_front()).await?;
 
         let page_arc = Arc::new(Mutex::new(page.clone()));
         self.page = Some(page_arc);
