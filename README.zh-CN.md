@@ -22,7 +22,7 @@
 
 ## 特性
 
-- **36 个 MCP 工具**（桌面 15 + 浏览器 21）—— 完整参考见
+- **37 个 MCP 工具**（桌面 15 + 浏览器 22）—— 完整参考见
   [TOOLS.md](TOOLS.md) / [TOOLS.zh-CN.md](TOOLS.zh-CN.md)。
 - **桌面自动化**：屏幕分辨率、截图（PNG/base64）、窗口列表、窗口激活/截图/移动/缩放/信息查询、
   鼠标点击/拖拽/滚轮/定位、键盘输入/快捷键、剪贴板写入/清空 —— 基于
@@ -33,18 +33,18 @@
   —— 这是 Nuphus 桌面应用实战验证过的 vision→perceive 流程。BYOK 环境变量、
   模型配置与推荐配合见 [TOOLS.md](TOOLS.md)。
 - **浏览器自动化**：导航、快照（无障碍树 `@N` 引用）、点击、输入、批量脚本、
-  滚动、正文提取、截图、JS 执行、前进/后退、等待、Cookie 读写/导入、文件上传、
+  滚动、正文提取、截图、JS 执行、前进/后退、等待、Cookie 读写/导入、文件上传/拖放、
   标签页、下载目录 —— 基于 `nuphus-browser`（chromiumoxide CDP）。
 - **零成本 stdio**：无 HTTP 服务、无常驻进程。进程从 stdin 读单行 JSON，向
   stdout 写响应。
-- **安全优先**：破坏性工具按 MCP 规范标注；可选严格确认模式；截图/上传路径校验。
+- **安全优先**：破坏性工具按 MCP 规范标注；可选严格确认模式；截图、上传和文件拖放路径校验。
 
 ## 仓库结构
 
 ```
 nuphus-mcp/
 ├── Cargo.toml                  # workspace 根
-├── TOOLS.md / TOOLS.zh-CN.md   # 36 工具参考文档
+├── TOOLS.md / TOOLS.zh-CN.md   # 37 工具参考文档
 ├── crates/
 │   ├── nuphus-mcp/             # MCP Server（本仓库产品）
 │   ├── nuphus-browser/         # 浏览器自动化核心（CDP）

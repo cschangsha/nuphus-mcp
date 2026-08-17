@@ -18,7 +18,7 @@
 - **计算机视觉（2 个工具）**：`desktop_vision`（BYOK —— 截图发送到你自己的视觉模型，OpenAI 兼容或 Anthropic 原生 API）与 `desktop_perceive`（本地 OCR + YOLO 元素定位，PaddleOCR，首次运行自动下载模型）。
 - **浏览器自动化（21 个工具）**：导航、快照（无障碍树 `@N` 引用）、点击、输入、批量脚本、滚动、正文提取、截图、JS 执行、前进/后退、等待、Cookie 读写/导入、文件上传、标签页、下载目录 —— 基于 `nuphus-browser`（chromiumoxide CDP，与 Nuphus 主程序共用）。
 - **零成本 stdio**：无 HTTP 服务、无常驻进程。进程从 stdin 读单行 JSON，向 stdout 写响应。
-- **安全优先**：破坏性工具按 MCP 规范标注；可选严格确认模式；截图/上传路径校验。
+- **安全优先**：破坏性工具按 MCP 规范标注；可选严格确认模式；截图、上传和文件拖放路径校验。
 - **Dogfooding**：Nuphus 主程序自身通过 MCP client 调用本 server（双通道），MCP 层被真实使用持续验证。
 
 ## 环境依赖
@@ -176,8 +176,8 @@ cargo run -p nuphus-mcp --example demo
 ```
 
 ```
-[1] initialize OK → server=nuphus-mcp v0.1.0, protocol=2024-11-05
-[2] tools/list OK → 31 tools (desktop 10 + browser 21), 23 marked destructive
+[1] initialize OK → server=nuphus-mcp, protocol=2024-11-05
+[2] tools/list OK → 37 tools (desktop 15 + browser 22), 26 marked destructive
 [3] desktop_screen_size → {"height":1080,"width":1920}
 [4] browser_navigate → Navigated to: data:text/html,...  | Title: Untitled
 [5] browser_evaluate → "nuphus-mcp demo"
@@ -206,13 +206,13 @@ cargo run -p nuphus-mcp --example demo
 | `desktop_clipboard_write` | 写入长文本（>500 字符）到剪贴板 |
 | `desktop_clipboard_clean` | 清空系统剪贴板 |
 
-### 浏览器（21 个）
+### 浏览器（22 个）
 
 | 工具 | 说明 |
 |------|------|
 | `browser_navigate` | 打开 URL（导航后自动快照） |
 | `browser_snapshot` | 无障碍树快照，带 `@N` 引用 |
-| `browser_click` / `browser_type` | 点击 / 输入（CSS 选择器或 `@N`） |
+| `browser_click` / `browser_type` | 左/右/中键点击 / 输入（CSS 选择器或 `@N`） |
 | `browser_exec` | 单次 CDP 往返执行多步脚本 |
 | `browser_scroll` / `browser_extract` | 滚动页面 / 提取可读文本 |
 | `browser_screenshot` | 当前页面截图 |
@@ -221,6 +221,7 @@ cargo run -p nuphus-mcp --example demo
 | `browser_wait_for` | 等待选择器状态（attached/visible/hidden） |
 | `browser_cookies_get` / `browser_cookies_set` / `browser_import_cookies` | Cookie 管理 |
 | `browser_upload` | 上传文件到 `<input type=file>` |
+| `browser_drag_files` | 原生拖放本地文件/目录到任意浏览器元素 |
 | `browser_list_tabs` / `browser_switch_tab` / `browser_new_tab` | 标签页管理 |
 | `browser_list_downloads` | 列出下载目录 |
 | `browser_close` | 关闭浏览器 |
@@ -236,7 +237,9 @@ cargo run -p nuphus-mcp --example demo
    # tools/call {"name":"desktop_input","arguments":{"mode":"type","hwnd":123}} → isError "requires confirmation"
    # tools/call {"name":"desktop_input","arguments":{"mode":"type","hwnd":123,"confirm":true}} → 执行
    ```
-3. **路径校验** — 截图保存路径拒绝 `..` 穿越、Windows 设备路径（`\\?\`、`\\.\`）与系统保护目录；上传文件必须真实存在。
+3. **路径校验** — 桌面/浏览器截图保存路径拒绝 `..` 穿越、Windows 设备路径
+   （`\\?\`、`\\.\`）与系统保护目录；上传文件必须真实存在，拖放路径必须为
+   规范化后的绝对路径。
 4. **stdio / 仅本机** — 传输为本地管道，无网络面；只有能本机拉起该二进制的进程才能触达。
 5. **只读工具不受影响** — `desktop_screen_size`、`desktop_windows_list`、`browser_snapshot` 等永不要求确认。
 
