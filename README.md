@@ -274,8 +274,9 @@ Supported MCP methods: `initialize`, `notifications/initialized`, `ping`,
 ## DeepSeek Harness (DSH)
 
 **Recommended — install the official
-[dsh-nuphus-mcp](https://github.com/mrpulor-gh/dsh-nuphus-mcp) plugin.** It
-mounts nuphus-mcp into DSH as native tools with zero config —
+[dsh-nuphus-mcp](https://github.com/mrpulor-gh/dsh-nuphus-mcp) plugin** (Gitee
+mirror: [gitee.com/nuphus/dsh-nuphus-mcp](https://gitee.com/nuphus/dsh-nuphus-mcp)).
+It mounts nuphus-mcp into DSH as native tools with zero config —
 `--confirm-write` on by default, no code change needed:
 
 ```sh

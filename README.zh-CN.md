@@ -220,8 +220,9 @@ setx NUPHUS_MCP_CONFIRM_WRITE 1        # Windows（持久生效，新开的 shel
 ## 接入 DeepSeek Harness（DSH）
 
 **推荐：安装官方
-[dsh-nuphus-mcp](https://github.com/mrpulor-gh/dsh-nuphus-mcp) 插件**，即可把
-nuphus-mcp 以原生工具的形式挂载进 DSH，零配置、默认开启
+[dsh-nuphus-mcp](https://github.com/mrpulor-gh/dsh-nuphus-mcp) 插件**（Gitee
+镜像：[gitee.com/nuphus/dsh-nuphus-mcp](https://gitee.com/nuphus/dsh-nuphus-mcp)），
+即可把 nuphus-mcp 以原生工具的形式挂载进 DSH，零配置、默认开启
 `--confirm-write`、无需改动代码：
 
 ```sh
