@@ -217,6 +217,26 @@ setx NUPHUS_MCP_CONFIRM_WRITE 1        # Windows（持久生效，新开的 shel
 
 支持的方法：`initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call`。
 
+## 接入 DeepSeek Harness（DSH）
+
+`nuphus-mcp` 是纯 stdio MCP server，可直接经 DSH 内置的 MCP 客户端
+（`@deepseek-ai/dsh-mcp-client`）接入，无需改动代码。挂载到 DSH 的
+`cordis.yml` / patch：
+
+```yaml
+- id: nuphus-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: nuphus-mcp
+    transport: stdio
+    command: nuphus-mcp
+    args: ["--confirm-write"]
+    toolCallTimeoutMs: 120000   # DSH 默认 60000，截图/OCR 会超时
+```
+
+工具以 `mcp__nuphus-mcp__*` 注册（如 `mcp__nuphus-mcp__desktop_click`）。DSH
+需运行在被控机器的桌面会话里。
+
 ## Demo
 
 自包含 stdio 客户端，完整走 `initialize → tools/list → tools/call`：

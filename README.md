@@ -271,6 +271,27 @@ path to the binary (`nuphus-mcp` / `nuphus-mcp.exe`).
 Supported MCP methods: `initialize`, `notifications/initialized`, `ping`,
 `tools/list`, `tools/call`.
 
+## DeepSeek Harness (DSH)
+
+Plug into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+as a plain stdio MCP server via its built-in MCP client
+(`@deepseek-ai/dsh-mcp-client`) — no code change needed. Mount in DSH's
+`cordis.yml` / patch:
+
+```yaml
+- id: nuphus-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: nuphus-mcp
+    transport: stdio
+    command: nuphus-mcp
+    args: ["--confirm-write"]
+    toolCallTimeoutMs: 120000   # DSH default 60000 is too low for screenshots/OCR
+```
+
+Tools register as `mcp__nuphus-mcp__*` (e.g. `mcp__nuphus-mcp__desktop_click`).
+Run DSH in the desktop session of the machine you want controlled.
+
 ## Demo
 
 A self-contained stdio client that walks through
