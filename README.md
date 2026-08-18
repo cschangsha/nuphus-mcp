@@ -273,10 +273,19 @@ Supported MCP methods: `initialize`, `notifications/initialized`, `ping`,
 
 ## DeepSeek Harness (DSH)
 
-Plug into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-as a plain stdio MCP server via its built-in MCP client
-(`@deepseek-ai/dsh-mcp-client`) — no code change needed. Mount in DSH's
-`cordis.yml` / patch:
+**Recommended — install the official
+[dsh-nuphus-mcp](https://github.com/mrpulor-gh/dsh-nuphus-mcp) plugin.** It
+mounts nuphus-mcp into DSH as native tools with zero config —
+`--confirm-write` on by default, no code change needed:
+
+```sh
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:mrpulor-gh/dsh-nuphus-mcp
+```
+
+**Manual alternative** — plug into
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) as a plain
+stdio MCP server via its built-in MCP client (`@deepseek-ai/dsh-mcp-client`).
+Mount in DSH's `cordis.yml` / patch:
 
 ```yaml
 - id: nuphus-mcp

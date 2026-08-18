@@ -219,8 +219,17 @@ setx NUPHUS_MCP_CONFIRM_WRITE 1        # Windows（持久生效，新开的 shel
 
 ## 接入 DeepSeek Harness（DSH）
 
-`nuphus-mcp` 是纯 stdio MCP server，可直接经 DSH 内置的 MCP 客户端
-（`@deepseek-ai/dsh-mcp-client`）接入，无需改动代码。挂载到 DSH 的
+**推荐：安装官方
+[dsh-nuphus-mcp](https://github.com/mrpulor-gh/dsh-nuphus-mcp) 插件**，即可把
+nuphus-mcp 以原生工具的形式挂载进 DSH，零配置、默认开启
+`--confirm-write`、无需改动代码：
+
+```sh
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:mrpulor-gh/dsh-nuphus-mcp
+```
+
+**手动接入方式**：`nuphus-mcp` 是纯 stdio MCP server，可直接经 DSH 内置的
+MCP 客户端（`@deepseek-ai/dsh-mcp-client`）接入，无需改动代码。挂载到 DSH 的
 `cordis.yml` / patch：
 
 ```yaml
