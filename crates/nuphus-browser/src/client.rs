@@ -630,6 +630,62 @@ fn find_identity_processes(exe_path: &str) -> Vec<(Option<u16>, Option<PathBuf>)
         .collect()
 }
 
+/// Kill the Chrome main process(es) using the given profile dir.
+///
+/// Used to upgrade a resident headless instance to a headed relaunch: an
+/// attached instance is not owned by this process (`child_process` is `None`),
+/// so `close()` only drops the CDP connection — the process itself must be
+/// terminated explicitly. Only the main process is targeted; child processes
+/// (renderer/gpu/utility, which carry `--type=`) die with the parent. A short
+/// wait lets the process release its profile locks before a hard relaunch.
+fn kill_chrome_for_profile(profile_dir: &std::path::Path) -> Result<(), BrowserError> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+
+    let profile_key = profile_dir.to_string_lossy().to_lowercase();
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::everything(),
+    );
+
+    let mut killed_any = false;
+    for process in sys.processes().values() {
+        let name = process.name().to_string_lossy().to_lowercase();
+        if name != "chrome.exe" && name != "msedge.exe" && name != "chromium.exe" {
+            continue;
+        }
+        let cmd: Vec<String> = process
+            .cmd()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        // Skip child processes — only the main process owns the profile.
+        if cmd.iter().any(|a| a.starts_with("--type=")) {
+            continue;
+        }
+        if cmd.join(" ").to_lowercase().contains(&profile_key) {
+            process.kill();
+            killed_any = true;
+            tracing::info!(
+                "[Browser] killed process {:?} for profile upgrade",
+                process.pid()
+            );
+        }
+    }
+
+    if !killed_any {
+        return Err(BrowserError::Launch(format!(
+            "no running Chrome for profile {} found to upgrade",
+            profile_dir.display()
+        )));
+    }
+
+    // Give the killed process a moment to release SingletonLock / SingletonSocket.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    Ok(())
+}
+
 /// GET `{base}/json/version` (no_proxy, short timeout); returns the browser
 /// version string only when the endpoint actually speaks CDP.
 async fn probe_cdp_version(base: &str) -> Option<String> {
@@ -836,7 +892,23 @@ impl BrowserClient {
         // existing instance, leftovers from a previous crash, or another Nuphus process), connect and reuse it —
         // only one Chrome instance per profile is allowed at a time, so a hard launch would inevitably fail.
         if self.try_attach().await.is_ok() {
-            return Ok(());
+            // A headed request must not ride a headless instance: web_extract / cookies CDP may
+            // have left a headless Chrome resident in this profile (attached instances are not
+            // owned here — close() only drops the connection, the process survives). Probe the
+            // user agent and upgrade: kill the process, then fall through to the headed launch.
+            if !headless && self.instance_is_headless().await.unwrap_or(false) {
+                tracing::info!(
+                    "[Browser] attached to headless instance; upgrading to headed (profile={})",
+                    self.profile_dir.display()
+                );
+                self.close().await?;
+                kill_chrome_for_profile(&self.profile_dir)?;
+                // close() cleared the local connection; DevToolsActivePort may still point at
+                // the (now dead) instance — attach_target_alive() below detects the dead port
+                // and proceeds to a hard headed launch.
+            } else {
+                return Ok(());
+            }
         }
 
         // Before deleting locks, confirm the attach target is actually dead: if DevToolsActivePort
@@ -1045,6 +1117,25 @@ impl BrowserClient {
         self.browser = Some(Arc::new(Mutex::new(browser)));
         self.launched_headless = Some(headless);
         Ok(())
+    }
+
+    /// Probe whether the connected Chrome instance runs headless.
+    ///
+    /// CDP `Browser.getVersion` reports a user agent of `HeadlessChrome/…` for
+    /// headless launches vs `Chrome/…` for headed ones. Used to upgrade a
+    /// resident headless instance (left behind by web_extract / cookies CDP)
+    /// when a headed request needs a user-visible window. `None`/failure on the
+    /// probe is treated as headed — never block a headed session on a probe.
+    async fn instance_is_headless(&self) -> Result<bool, BrowserError> {
+        let Some(browser_arc) = self.browser.as_ref() else {
+            return Ok(false);
+        };
+        let browser = browser_arc.lock().await;
+        let version = browser
+            .version()
+            .await
+            .map_err(|e| BrowserError::Launch(format!("headless probe failed: {e}")))?;
+        Ok(version.user_agent.contains("HeadlessChrome"))
     }
 
     /// Try to attach to a Chrome instance already running for the same profile.
