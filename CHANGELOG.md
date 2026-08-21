@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-08-21
+
+### Fixed
+
+- **Mouse movement silently "succeeding" without moving the cursor** — `move_to`
+  on Windows ignored the `SetCursorPos` return value (`let _ = ...`) and always
+  returned `Ok`, so when the OS rejected the move (session / privilege limits)
+  callers got a fake success while the cursor never moved. `move_to` now checks
+  the API result and verifies the actual cursor position against the target
+  (2px tolerance for DPI rounding) before returning; any mismatch fails loudly
+  with a descriptive error instead of a silent success. `drag` propagates the
+  same errors instead of swallowing them mid-path.
+
 ## [0.1.11] - 2026-08-09
 
 ### Fixed
