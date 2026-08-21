@@ -104,6 +104,47 @@ chrome --remote-debugging-port=9222 --user-data-dir=...
 失败会返回明确错误（不会静默回退到错误的浏览器）。外部浏览器归你所有——
 server 退出时不会杀掉它。
 
+### 保留登录态：让 `browser_*` 操作带扩展 / 登录态的原生浏览器
+
+想让 `browser_*` 工具操作带你自己扩展 / 书签 / 登录态的浏览器？先了解一个
+**Chrome 136+ 的硬性限制**：Chrome 官方安全变更后，`--remote-debugging-port`
+与 `--remote-debugging-pipe` 对**默认用户数据目录直接失效**，必须搭配
+`--user-data-dir` 指向非默认目录。这是防窃密木马（infostealer）通过本地调试
+端口偷取真实 Cookie 的刻意设计——**不是 nuphus-mcp 的缺陷**，也没有任何 flag /
+注册表策略能绕过（`RemoteDebuggingAllowed` 策略只能"允许/禁止"这些开关，
+不能解除默认目录限制）。
+
+因此"真实默认 profile + 可被 CDP 操控"在 136+ 上互斥。按以下优先级选一种：
+
+**方案 A（推荐，最简单）：在 nuphus 专用 profile 登录一次**
+
+nuphus-mcp 默认管理自己的 Chrome 实例（独立 `--user-data-dir`，天然可调试）。
+打开它，手动登录需要保持会话的站点一次，登录态即持久化到该 profile，之后
+`browser_*` 调用全部自带这些会话。零配置、零复制。
+
+**方案 B：复制真实 profile 生成可调试副本（保留扩展 / 书签 / 登录态）**
+
+需要原浏览器的扩展与登录态时，复制真实 profile 再启动：
+
+1. 先**完全退出**正在运行的真实 Chrome / Edge（profile 锁冲突）
+2. 复制 profile 到非默认目录：
+   - Windows：`copy "%LOCALAPPDATA%\Google\Chrome\User Data\Default" <副本>\Default`
+   - macOS：`cp -R ~/Library/"Application Support"/Google/Chrome/Default <副本>/Default`
+   - Linux：`cp -R ~/.config/google-chrome/Default <副本>/Default`
+3. 用副本启动并开调试端口：`chrome --remote-debugging-port=9222 --user-data-dir=<副本>`
+4. 配置外部 attach：`NUPHUS_MCP_BROWSER_CDP_URL=http://127.0.0.1:9222`
+   （配合 `NUPHUS_BROWSER_EXE_PATH` / `NUPHUS_BROWSER_USER_DATA_DIR` 可自动自愈端口）
+
+注意：Windows 下 Cookie / 密码为 DPAPI 用户级加密，副本在同用户下可直接解密，
+登录态基本完整；macOS 部分凭据在钥匙串，个别站点需重新登录。副本可能数百 MB
+到 GB 级，且不能与真实浏览器同时运行。
+
+**方案 C：桌面视觉自动化：操控正在运行的真实浏览器窗口**
+
+如果目标是操作用户**当前运行中**的真实浏览器（DOM 级做不到这一点），那属于
+桌面 OCR + 键鼠链路（`desktop_perceive` / `desktop_*` 工具），以视觉方式点击、
+输入、读取屏幕，不依赖 CDP——但没有 DOM 访问与登录态注入能力。
+
 ### perceive 模型（本地，自动下载）
 
 `desktop_perceive` 用 ONNX Runtime 本地运行 PaddleOCR 和 YOLO 图标检测。首次

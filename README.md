@@ -154,6 +154,58 @@ once — close and reopen the window and the next tool call just works. Without
 an identity, attach failures stay hard errors asking you to update the
 configured URL. Either way there is **no fallback to a managed Chrome**.
 
+### Keeping logins: drive a browser that has your extensions & sessions
+
+Want `browser_*` tools to drive a browser carrying your own extensions /
+bookmarks / login state? First, a **hard Chrome 136+ restriction**: after
+Chrome's official security change, `--remote-debugging-port` and
+`--remote-debugging-pipe` are **ignored against the default user data
+directory** — they must be paired with `--user-data-dir` pointing at a
+non-default directory. This is a deliberate design to stop infostealer malware
+from reading real cookies through the local debugging port — **not a
+nuphus-mcp defect**, and no flag / registry policy can bypass it
+(`RemoteDebuggingAllowed` only allows/disallows the switches; it cannot
+re-enable them on the default directory).
+
+So "real default profile + CDP-controllable" are mutually exclusive since
+136+. Pick one of the following, in priority order:
+
+**Option A (recommended, simplest): log in once in the nuphus-managed profile**
+
+nuphus-mcp manages its own Chrome instance by default (a dedicated
+`--user-data-dir`, always debuggable). Open it, log into the sites you want to
+stay signed in once — the state persists to that profile and every subsequent
+`browser_*` call carries those sessions. Zero config, zero copying.
+
+**Option B: copy your real profile to a debuggable directory (keeps
+extensions / bookmarks / logins)**
+
+When you need the original browser's extensions and login state, copy the real
+profile and launch from the copy:
+
+1. **Quit** your running Chrome / Edge entirely first (profile-lock conflict)
+2. Copy the profile to a non-default dir:
+   - Windows: `copy "%LOCALAPPDATA%\Google\Chrome\User Data\Default" <dest>\Default`
+   - macOS: `cp -R ~/Library/"Application Support"/Google/Chrome/Default <dest>/Default`
+   - Linux: `cp -R ~/.config/google-chrome/Default <dest>/Default`
+3. Launch the copy with a debug port: `chrome --remote-debugging-port=9222 --user-data-dir=<dest>`
+4. Attach as an external browser: `NUPHUS_MCP_BROWSER_CDP_URL=http://127.0.0.1:9222`
+   (add `NUPHUS_BROWSER_EXE_PATH` / `NUPHUS_BROWSER_USER_DATA_DIR` for port self-healing)
+
+Notes: on Windows, cookies / passwords are DPAPI user-level encrypted and
+decrypt fine from the copy under the same user — login state mostly survives;
+on macOS some credentials live in Keychain and a few sites may ask to log in
+again. The copy can be hundreds of MB to GBs, and it cannot run at the same
+time as the real browser.
+
+**Option C: desktop visual automation — operate the actually-running browser
+window**
+
+To operate the user's **currently running** real browser (DOM-level is not
+possible), use the desktop OCR + mouse/keyboard chain
+(`desktop_perceive` / `desktop_*` tools) — visually click, type and read the
+screen without CDP, at the cost of no DOM access and no login-state injection.
+
 ### Perceive models (local, auto-downloaded)
 
 `desktop_perceive` runs PaddleOCR and YOLO icon detection locally with ONNX
