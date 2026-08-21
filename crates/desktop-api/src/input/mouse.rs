@@ -22,9 +22,24 @@ fn enigo() -> Result<enigo::Enigo> {
 pub async fn move_to(x: i32, y: i32) -> Result<()> {
     #[cfg(windows)]
     {
-        use ::windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+        use ::windows::Win32::Foundation::POINT;
+        use ::windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
         unsafe {
-            let _ = SetCursorPos(x, y);
+            // SetCursorPos 失败时返回 Err（如系统拦截 / 会话限制）——必须检查，不能静默吞掉
+            if SetCursorPos(x, y).is_err() {
+                return Err(DesktopError::InputFailed(format!(
+                    "SetCursorPos({x}, {y}) 被系统拒绝，鼠标未移动"
+                )));
+            }
+            // 移动后自校验：读取实际光标位置，确认到达目标（容差 2px 防 DPI 舍入）
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            if (pt.x - x).abs() > 2 || (pt.y - y).abs() > 2 {
+                return Err(DesktopError::InputFailed(format!(
+                    "鼠标移动校验失败：目标({x}, {y})，实际({}, {})——请检查坐标换算/屏幕 DPI/会话限制",
+                    pt.x, pt.y
+                )));
+            }
         }
         Ok(())
     }
@@ -200,7 +215,7 @@ pub async fn drag(start: Point, end: Point) -> Result<()> {
             let t = i as f32 / steps as f32;
             let x = (start.x as f32 + (end.x as f32 - start.x as f32) * t) as i32;
             let y = (start.y as f32 + (end.y as f32 - start.y as f32) * t) as i32;
-            let _ = move_to(x, y).await;
+            move_to(x, y).await?;
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         unsafe {
@@ -218,7 +233,7 @@ pub async fn drag(start: Point, end: Point) -> Result<()> {
             let t = i as f32 / 20.0;
             let x = (start.x as f32 + (end.x as f32 - start.x as f32) * t) as i32;
             let y = (start.y as f32 + (end.y as f32 - start.y as f32) * t) as i32;
-            let _ = move_to(x, y).await;
+            move_to(x, y).await?;
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         let mut e = enigo()?;
